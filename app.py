@@ -24,31 +24,43 @@ def get_geoid_height(lat, lon, ver="2024"):
         out_data = res.get('OutputData', {})
         gh = out_data.get('geoidHeight') or res.get('geoidHeight')
         return float(gh) if gh is not None else 0.0
-    except:
-        return 0.0
+    except: return 0.0
 
 def parse_sima(uploaded_file):
+    """SIMAファイルを解析（A01座標データ、C00/C01測設データの両対応）"""
     points = []
     uploaded_file.seek(0)
     content = uploaded_file.read().decode('shift-jis', errors='replace')
     for line in content.splitlines():
         parts = line.split(',')
-        if len(parts) >= 6 and parts[0] in ['C00', 'C01']:
-            try:
-                points.append({'Name': parts[1], 'X': float(parts[3]), 'Y': float(parts[4]), 'H': float(parts[5]) if parts[5] else 0.0})
-            except: continue
+        if len(parts) >= 6:
+            # A01: 座標データ（お送りいただいたファイル形式）
+            if parts[0] == 'A01':
+                try:
+                    points.append({
+                        'Name': parts[2], # A01は2番目(0始まりで2)が点名
+                        'X': float(parts[3]), 'Y': float(parts[4]), 'H': float(parts[5]) if parts[5] else 0.0
+                    })
+                except: continue
+            # C00/C01: 測設データ
+            elif parts[0] in ['C00', 'C01']:
+                try:
+                    points.append({
+                        'Name': parts[1], # C01は1番目が点名
+                        'X': float(parts[3]), 'Y': float(parts[4]), 'H': float(parts[5]) if parts[5] else 0.0
+                    })
+                except: continue
     return pd.DataFrame(points)
 
-# --- 3. サイドバー設定（地図切り替えをここに追加） ---
+# --- 3. サイドバー設定 ---
 st.sidebar.header("共通設定")
-zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8) # 9系
+zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8) # 9系デフォルト
 use_geoid = st.sidebar.selectbox("ジオイドモデル", ["ジオイド2024", "日本のジオイド2011", "使用しない"])
 add_offset = st.sidebar.checkbox("アンテナ高(1.803m)を加算", value=True)
 offset_val = 1.803 if add_offset else 0.0
 
 st.sidebar.markdown("---")
 st.sidebar.header("地図表示設定")
-# 地図の種類をサイドバーで選べるように変更
 map_type = st.sidebar.radio("背景地図の選択", ["標準地図", "航空写真"])
 
 epsg = 6668 + zone
@@ -91,7 +103,9 @@ with tab2:
                     df_in['H'] = pd.to_numeric(df_in['H'], errors='coerce')
                     df_in = df_in.dropna(subset=['X', 'Y'])
 
-                if not df_in.empty:
+                if df_in.empty:
+                    st.error("有効なデータが見つかりませんでした。SIMAのレコード(A01等)を確認してください。")
+                else:
                     lons, lats = to_latlon.transform(df_in['Y'].values, df_in['X'].values)
                     with st.spinner("ジオイド高取得中..."):
                         ghs = [get_geoid_height(la, lo, use_geoid) if "ジオイド" in use_geoid else 0.0 for la, lo in zip(lats, lons)]
@@ -123,27 +137,16 @@ if st.session_state.result_df is not None:
             p.altitudemode = simplekml.AltitudeMode.absolute
         st.download_button("🌍 KML保存", kml.kml(), "result.kml", "application/vnd.google-earth.kml+xml")
 
-    # 地図表示
     st.subheader("🗺 マッププレビュー")
     avg_lat, avg_lon = res['変換後_緯度'].mean(), res['変換後_経度'].mean()
     
-    # サイドバーの選択に応じてタイルを決定
-    if map_type == "航空写真":
-        tiles = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
-        attr = '国土地理院 航空写真'
-    else:
-        tiles = 'OpenStreetMap'
-        attr = 'OpenStreetMap contributors'
+    tiles = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg' if map_type == "航空写真" else 'OpenStreetMap'
+    attr = '国土地理院 航空写真' if map_type == "航空写真" else 'OpenStreetMap contributors'
 
     m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles, attr=attr)
 
     for _, r in res.iterrows():
-        folium.Marker(
-            location=[r['変換後_緯度'], r['変換後_経度']],
-            tooltip=f"点名: {r['点名']}",
-            icon=folium.Icon(color="blue")
-        ).add_to(m)
-        
+        folium.Marker([r['変換後_緯度'], r['変換後_経度']], tooltip=f"点名: {r['点名']}").add_to(m)
         folium.map.Marker(
             [r['変換後_緯度'], r['変換後_経度']],
             icon=folium.DivIcon(
@@ -152,4 +155,4 @@ if st.session_state.result_df is not None:
             )
         ).add_to(m)
 
-    st_folium(m, width=1200, height=600, key="survey_map_fixed")
+    st_folium(m, width=1200, height=600, key="survey_map_v2")
