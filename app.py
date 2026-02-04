@@ -16,7 +16,6 @@ if 'result_df' not in st.session_state:
 
 # --- 2. 共通関数 ---
 def get_geoid_height(lat, lon, ver="2024"):
-    """国土地理院APIからジオイド高を取得"""
     v = "2024" if "2024" in ver else "2011"
     try:
         url = f"https://vldb.gsi.go.jp/sokuchi/surveycalc/geoid/calcgh/cgi/geoidcalc.pl?outputType=json&latitude={lat}&longitude={lon}&gsigen={v}"
@@ -29,7 +28,6 @@ def get_geoid_height(lat, lon, ver="2024"):
         return 0.0
 
 def parse_sima(uploaded_file):
-    """SIMAファイルを解析（Shift-JIS固定）"""
     points = []
     uploaded_file.seek(0)
     content = uploaded_file.read().decode('shift-jis', errors='replace')
@@ -37,22 +35,21 @@ def parse_sima(uploaded_file):
         parts = line.split(',')
         if len(parts) >= 6 and parts[0] in ['C00', 'C01']:
             try:
-                points.append({
-                    'Name': parts[1], 
-                    'X': float(parts[3]), 
-                    'Y': float(parts[4]), 
-                    'H': float(parts[5]) if parts[5] else 0.0
-                })
+                points.append({'Name': parts[1], 'X': float(parts[3]), 'Y': float(parts[4]), 'H': float(parts[5]) if parts[5] else 0.0})
             except: continue
     return pd.DataFrame(points)
 
-# --- 3. サイドバー設定 ---
+# --- 3. サイドバー設定（地図切り替えをここに追加） ---
 st.sidebar.header("共通設定")
-# デフォルトを9系（index=8）に設定
-zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8) 
+zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8) # 9系
 use_geoid = st.sidebar.selectbox("ジオイドモデル", ["ジオイド2024", "日本のジオイド2011", "使用しない"])
 add_offset = st.sidebar.checkbox("アンテナ高(1.803m)を加算", value=True)
 offset_val = 1.803 if add_offset else 0.0
+
+st.sidebar.markdown("---")
+st.sidebar.header("地図表示設定")
+# 地図の種類をサイドバーで選べるように変更
+map_type = st.sidebar.radio("背景地図の選択", ["標準地図", "航空写真"])
 
 epsg = 6668 + zone
 to_latlon = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
@@ -76,9 +73,7 @@ with tab1:
         }])
 
 with tab2:
-    st.info("CSVの場合、[点名, X, Y, H] の順で並んでいる必要があります。")
     uploaded_file = st.file_uploader("CSVまたはSIMAをアップロード", type=["csv", "sim"])
-    
     if uploaded_file:
         if st.button("一括変換を開始"):
             try:
@@ -86,18 +81,11 @@ with tab2:
                 if uploaded_file.name.lower().endswith('.sim'):
                     df_in = parse_sima(uploaded_file)
                 else:
-                    # --- 文字コード対応の読み込み処理 ---
                     try:
-                        # まずはShift-JISで試す
-                        df_in = pd.read_csv(uploaded_file, header=None, usecols=[0, 1, 2, 3], 
-                                            names=['Name', 'X', 'Y', 'H'], encoding='shift-jis')
-                    except UnicodeDecodeError:
-                        # 失敗したらUTF-8で試す
+                        df_in = pd.read_csv(uploaded_file, header=None, usecols=[0, 1, 2, 3], names=['Name', 'X', 'Y', 'H'], encoding='shift-jis')
+                    except:
                         uploaded_file.seek(0)
-                        df_in = pd.read_csv(uploaded_file, header=None, usecols=[0, 1, 2, 3], 
-                                            names=['Name', 'X', 'Y', 'H'], encoding='utf-8')
-
-                    # 数値変換とエラー行の除外
+                        df_in = pd.read_csv(uploaded_file, header=None, usecols=[0, 1, 2, 3], names=['Name', 'X', 'Y', 'H'], encoding='utf-8')
                     df_in['X'] = pd.to_numeric(df_in['X'], errors='coerce')
                     df_in['Y'] = pd.to_numeric(df_in['Y'], errors='coerce')
                     df_in['H'] = pd.to_numeric(df_in['H'], errors='coerce')
@@ -105,15 +93,11 @@ with tab2:
 
                 if not df_in.empty:
                     lons, lats = to_latlon.transform(df_in['Y'].values, df_in['X'].values)
-                    with st.spinner("ジオイド高を取得中..."):
+                    with st.spinner("ジオイド高取得中..."):
                         ghs = [get_geoid_height(la, lo, use_geoid) if "ジオイド" in use_geoid else 0.0 for la, lo in zip(lats, lons)]
-                    
                     st.session_state.result_df = pd.DataFrame({
-                        "点名": df_in['Name'],
-                        "変換前_X": df_in['X'], "変換前_Y": df_in['Y'], "変換前_標高(H)": df_in['H'],
-                        "変換後_緯度": lats, "変換後_経度": lons,
-                        "ジオイド高": ghs,
-                        "変換後_楕円体高": df_in['H'] + ghs + offset_val
+                        "点名": df_in['Name'], "変換前_X": df_in['X'], "変換前_Y": df_in['Y'], "変換前_標高(H)": df_in['H'],
+                        "変換後_緯度": lats, "変換後_経度": lons, "ジオイド高": ghs, "変換後_楕円体高": df_in['H'] + ghs + offset_val
                     })
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
@@ -122,10 +106,8 @@ with tab2:
 if st.session_state.result_df is not None:
     res = st.session_state.result_df.copy()
     disp = res.copy()
-    disp['変換後_緯度'] = disp['変換後_緯度'].map(lambda x: f"{x:.8f}")
-    disp['変換後_経度'] = disp['変換後_経度'].map(lambda x: f"{x:.8f}")
-    disp['ジオイド高'] = disp['ジオイド高'].map(lambda x: f"{x:.4f}")
-    disp['変換後_楕円体高'] = disp['変換後_楕円体高'].map(lambda x: f"{x:.4f}")
+    for c in ['変換後_緯度', '変換後_経度']: disp[c] = disp[c].map(lambda x: f"{x:.8f}")
+    for c in ['ジオイド高', '変換後_楕円体高']: disp[c] = disp[c].map(lambda x: f"{x:.4f}")
     
     st.write("---")
     st.subheader("✅ 変換結果")
@@ -133,42 +115,41 @@ if st.session_state.result_df is not None:
     
     col_dl1, col_dl2, _ = st.columns([2, 2, 6])
     with col_dl1:
-        st.download_button("📊 CSVを保存", disp.to_csv(index=False).encode('utf-8-sig'), "result.csv", "text/csv")
+        st.download_button("📊 CSV保存", disp.to_csv(index=False).encode('utf-8-sig'), "result.csv", "text/csv")
     with col_dl2:
         kml = simplekml.Kml()
         for _, r in res.iterrows():
-            pnt = kml.newpoint(name=r['点名'], coords=[(r['変換後_経度'], r['変換後_緯度'], r['変換後_楕円体高'])])
-            pnt.altitudemode = simplekml.AltitudeMode.absolute
-        st.download_button("🌍 KMLを保存", kml.kml(), "result.kml", "application/vnd.google-earth.kml+xml")
+            p = kml.newpoint(name=r['点名'], coords=[(r['変換後_経度'], r['変換後_緯度'], r['変換後_楕円体高'])])
+            p.altitudemode = simplekml.AltitudeMode.absolute
+        st.download_button("🌍 KML保存", kml.kml(), "result.kml", "application/vnd.google-earth.kml+xml")
 
     # 地図表示
     st.subheader("🗺 マッププレビュー")
     avg_lat, avg_lon = res['変換後_緯度'].mean(), res['変換後_経度'].mean()
-    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=17)
     
-    # 地理院地図 航空写真を追加
-    folium.TileLayer(
-        tiles='https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
-        attr='国土地理院', name='航空写真', overlay=False, control=True
-    ).add_to(m)
-    folium.LayerControl().add_to(m)
+    # サイドバーの選択に応じてタイルを決定
+    if map_type == "航空写真":
+        tiles = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
+        attr = '国土地理院 航空写真'
+    else:
+        tiles = 'OpenStreetMap'
+        attr = 'OpenStreetMap contributors'
+
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles, attr=attr)
 
     for _, r in res.iterrows():
-        # ピンの配置
         folium.Marker(
             location=[r['変換後_緯度'], r['変換後_経度']],
             tooltip=f"点名: {r['点名']}",
-            popup=f"点名: {r['点名']}<br>H: {r['変換後_楕円体高']:.3f}m",
             icon=folium.Icon(color="blue")
         ).add_to(m)
         
-        # 点名を地図上に直接描画 (赤文字・白縁)
         folium.map.Marker(
             [r['変換後_緯度'], r['変換後_経度']],
             icon=folium.DivIcon(
-                icon_size=(150,36), icon_anchor=(0,0),
+                icon_size=(150,36), icon_anchor=(7,20),
                 html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff; white-space: nowrap;">{r["点名"]}</div>',
             )
         ).add_to(m)
 
-    st_folium(m, width=1200, height=600, key="survey_map")
+    st_folium(m, width=1200, height=600, key="survey_map_fixed")
