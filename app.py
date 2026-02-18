@@ -9,7 +9,7 @@ import os
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="座標変換ツール", layout="wide")
-st.title("高精度 座標変換ツール（ジオイドデータ内蔵版）")
+st.title("高精度 座標変換ツール（全機能統合版）")
 
 # --- 2. ジオイドデータ読み込み関数 ---
 @st.cache_resource
@@ -30,64 +30,56 @@ def get_geoid_height(lat, lon, model_name):
     """内蔵データから線形補間でジオイド高を算出"""
     if not geoid_db:
         return 0.0
-    
     try:
         if model_name == "ジオイド2024":
             g = geoid_db.get('2024')
             if g is None: return 0.0
-            # 2024年版設定: 15-50N, 120-160E, 1分x1.5分間隔, 2101x1601 (N-to-S)
             r = (50.0 - lat) / (1/60)
             c = (lon - 120.0) / (1.5/60)
         else:
             g = geoid_db.get('2011')
             h = geoid_db.get('2011_h')
             if g is None or h is None: return 0.0
-            # 2011年版設定: S-to-N
             r = (lat - h[0]) / h[2]
             c = (lon - h[1]) / h[3]
 
         r0, c0 = int(np.floor(r)), int(np.floor(c))
         r1, c1 = r0 + 1, c0 + 1
-        
-        # 4点補間計算
         v00, v01, v10, v11 = g[r0, c0], g[r0, c1], g[r1, c0], g[r1, c1]
         if any(v > 900 for v in [v00, v01, v10, v11]): return 0.0
-        
         dr, dc = r - r0, c - c0
         return (1-dr)*(1-dc)*v00 + (1-dr)*dc*v01 + dr*(1-dc)*v10 + dr*dc*v11
     except:
         return 0.0
 
-# --- 3. SIMA解析関数 ---
+# --- 3. 解析関数 ---
 def parse_sima(file):
     points = []
     content = file.read().decode('shift-jis', errors='replace')
     for line in content.splitlines():
         p = line.split(',')
         if len(p) >= 6:
-            if p[0] == 'A01': # 座標データ
+            if p[0] == 'A01':
                 points.append({'点名': p[2], 'X': float(p[3]), 'Y': float(p[4]), 'H': float(p[5])})
-            elif p[0] in ['C00', 'C01']: # 測設データ
+            elif p[0] in ['C00', 'C01']:
                 points.append({'点名': p[1], 'X': float(p[3]), 'Y': float(p[4]), 'H': float(p[5])})
     return pd.DataFrame(points)
 
-# --- 4. メイン画面（サイドバー） ---
+# --- 4. サイドバー ---
 st.sidebar.header("共通設定")
 zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8)
 use_geoid = st.sidebar.selectbox("使用するジオイドモデル", ["ジオイド2024", "日本のジオイド2011", "使用しない"])
-offset_val = 1.803 if st.sidebar.checkbox("アンテナ高(1.803m)を加算", value=True) else 0.0
+offset_val = 1.803 if st.sidebar.checkbox("アンテナ高(1.803m)加算", value=True) else 0.0
 
-# データ欠損警告
-if use_geoid == "ジオイド2024" and '2024' not in geoid_db:
-    st.sidebar.error("❌ geoid2024.npz が見つかりません")
-if use_geoid == "日本のジオイド2011" and '2011' not in geoid_db:
-    st.sidebar.error("❌ geoid2011.npz が見つかりません")
+st.sidebar.markdown("---")
+st.sidebar.header("地図表示設定")
+map_type = st.sidebar.radio("背景地図の選択", ["標準地図", "航空写真"])
 
 # 座標変換準備
 epsg = 6668 + zone
 transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
 
-# --- 5. メイン画面（アップロード・計算） ---
+# --- 5. メイン処理 ---
 uploaded_file = st.file_uploader("CSVまたはSIMAをアップロード", type=["csv", "sim"])
 
 if uploaded_file:
@@ -97,39 +89,28 @@ if uploaded_file:
                 df = parse_sima(uploaded_file)
             else:
                 df = pd.read_csv(uploaded_file, encoding='shift-jis')
-                # 汎用的な列名対応
-                df = df.rename(columns={df.columns[0]: '点名', 'X': 'X', 'Y': 'Y', 'H': 'H'})
+                df = df.rename(columns={df.columns[0]: '点名'})
             
-            # 緯度経度変換
             lons, lats = transformer.transform(df['Y'].values, df['X'].values)
-            
-            # ジオイド高計算
             ghs = [get_geoid_height(la, lo, use_geoid) if use_geoid != "使用しない" else 0.0 for la, lo in zip(lats, lons)]
             
-            # 結果まとめ
             res = pd.DataFrame({
-                "点名": df['点名'],
-                "緯度": lats,
-                "経度": lons,
-                "適用モデル": use_geoid,
-                "ジオイド高": ghs,
+                "点名": df['点名'], "X": df['X'], "Y": df['Y'], "標高H": df['H'],
+                "緯度": lats, "経度": lons, "ジオイド高": ghs,
                 "楕円体高": df['H'].values + ghs + offset_val
             })
             st.session_state.result = res
         except Exception as e:
-            st.error(f"エラーが発生しました: {e}")
+            st.error(f"エラー: {e}")
 
-# --- 6. 結果表示とダウンロード ---
+# --- 6. 結果表示 ---
 if 'result' in st.session_state:
     res = st.session_state.result
-    st.success(f"✅ 計算完了！ ({use_geoid})")
+    st.success(f"✅ 計算完了！ モデル: {use_geoid}")
     
-    # 表示用フォーマット
     disp = res.copy()
-    disp['緯度'] = disp['緯度'].map(lambda x: f"{x:.8f}")
-    disp['経度'] = disp['経度'].map(lambda x: f"{x:.8f}")
-    disp['ジオイド高'] = disp['ジオイド高'].map(lambda x: f"{x:.4f}")
-    disp['楕円体高'] = disp['楕円体高'].map(lambda x: f"{x:.4f}")
+    for c in ['緯度', '経度']: disp[c] = disp[c].map(lambda x: f"{x:.8f}")
+    for c in ['ジオイド高', '楕円体高']: disp[c] = disp[c].map(lambda x: f"{x:.4f}")
     st.dataframe(disp, use_container_width=True)
     
     col1, col2, _ = st.columns([2, 2, 6])
@@ -141,9 +122,32 @@ if 'result' in st.session_state:
             kml.newpoint(name=str(r['点名']), coords=[(r['経度'], r['緯度'], r['楕円体高'])])
         st.download_button("🌍 KML保存", kml.kml(), "result.kml", "application/vnd.google-earth.kml+xml")
 
-    # 地図
+    # --- 地図表示（ラベル付き） ---
+    st.subheader("🗺 マッププレビュー")
     avg_lat, avg_lon = res['緯度'].mean(), res['経度'].mean()
-    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18)
+    
+    # 地図のタイルの設定
+    if map_type == "航空写真":
+        tiles = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
+        attr = "地理院タイル"
+    else:
+        tiles = "OpenStreetMap"
+        attr = "OpenStreetMap contributors"
+
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles, attr=attr)
+    
     for _, r in res.iterrows():
+        # 通常のマーカー（クリックで点名表示）
         folium.Marker([r['緯度'], r['経度']], tooltip=str(r['点名'])).add_to(m)
-    st_folium(m, width=1000, height=500)
+        
+        # 永久表示のラベル（DivIconを使用）
+        folium.map.Marker(
+            [r['緯度'], r['経度']],
+            icon=folium.DivIcon(
+                icon_size=(150, 36),
+                icon_anchor=(7, 20),
+                html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff; white-space: nowrap;">{r["点名"]}</div>'
+            )
+        ).add_to(m)
+        
+    st_folium(m, width=1200, height=500)
