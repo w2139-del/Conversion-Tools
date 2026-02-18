@@ -94,4 +94,66 @@ if uploaded_file:
             ghs = [get_geoid_height(la, lo, use_geoid) for la, lo in zip(lats, lons)]
             
             res = pd.DataFrame({
-                "点名": df['点名'], "X": df['X
+                "点名": df['点名'], "X": df['X'], "Y": df['Y'], "標高H": df['H'],
+                "緯度": lats, "経度": lons, "適用モデル": use_geoid, # ←表記を追加
+                "ジオイド高": ghs,
+                "楕円体高": df['H'].values + ghs + offset_val
+            })
+            st.session_state.result = res
+        except Exception as e:
+            st.error(f"エラーが発生しました: {e}")
+
+# --- 6. 結果表示・保存 ---
+if 'result' in st.session_state:
+    res = st.session_state.result
+    # 【追加】使用モデルの強調表示
+    st.success(f"✅ 計算完了：【{res['適用モデル'].iloc[0]}】を使用して計算しました")
+    
+    disp = res.copy()
+    for c in ['緯度', '経度']: disp[c] = disp[c].map(lambda x: f"{x:.8f}")
+    for c in ['ジオイド高', '楕円体高']: disp[c] = disp[c].map(lambda x: f"{x:.4f}")
+    st.dataframe(disp, use_container_width=True)
+    
+    col1, col2, _ = st.columns([2, 2, 6])
+    # 【追加】ファイル名にモデル名を連動
+    m_name = res['適用モデル'].iloc[0]
+    with col1:
+        st.download_button(
+            f"📊 CSVとして保存", 
+            disp.to_csv(index=False).encode('utf-8-sig'), 
+            f"変換結果_{m_name}.csv", 
+            "text/csv"
+        )
+    with col2:
+        kml = simplekml.Kml()
+        for _, r in res.iterrows():
+            kml.newpoint(name=str(r['点名']), coords=[(r['経度'], r['緯度'], r['楕円体高'])])
+        st.download_button(
+            f"🌍 KMLとして保存", 
+            kml.kml(), 
+            f"変換結果_{m_name}.kml", 
+            "application/vnd.google-earth.kml+xml"
+        )
+
+    # --- 地図表示（ラベル付き） ---
+    st.subheader("🗺 マッププレビュー")
+    avg_lat, avg_lon = res['緯度'].mean(), res['経度'].mean()
+    
+    if map_type == "航空写真":
+        tiles = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
+        attr = "地理院タイル"
+    else:
+        tiles = "OpenStreetMap"
+        attr = "OSM"
+
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles, attr=attr)
+    for _, r in res.iterrows():
+        folium.Marker([r['緯度'], r['経度']], tooltip=str(r['点名'])).add_to(m)
+        folium.map.Marker(
+            [r['緯度'], r['経度']],
+            icon=folium.DivIcon(
+                icon_size=(150, 36), icon_anchor=(7, 20),
+                html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff; white-space: nowrap;">{r["点名"]}</div>'
+            )
+        ).add_to(m)
+    st_folium(m, width=1200, height=500)
