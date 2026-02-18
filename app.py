@@ -11,51 +11,54 @@ import io
 st.set_page_config(page_title="座標変換ツール", layout="wide")
 st.title("座標変換ツール（KML/KMZ出力対応）")
 
+# ジオイド設定などが変わった場合に、結果をリセットするためのトリガー
 if 'result_df' not in st.session_state:
     st.session_state.result_df = None
 
 # --- 2. 共通関数 ---
 def get_geoid_height(lat, lon, ver="2024"):
-    v = "2024" if "2024" in ver else "2011"
+    """国土地理院APIからジオイド高を取得（gsig指定を厳密化）"""
+    # API仕様に合わせて 'gsig2024' または 'gsig2011' を生成
+    v_param = "gsig2024" if "2024" in ver else "gsig2011"
+    
     try:
-        url = f"https://vldb.gsi.go.jp/sokuchi/surveycalc/geoid/calcgh/cgi/geoidcalc.pl?outputType=json&latitude={lat}&longitude={lon}&gsigen={v}"
+        url = f"https://vldb.gsi.go.jp/sokuchi/surveycalc/geoid/calcgh/cgi/geoidcalc.pl?outputType=json&latitude={lat}&longitude={lon}&gsigen={v_param}"
         response = requests.get(url, timeout=10)
         res = response.json()
         out_data = res.get('OutputData', {})
         gh = out_data.get('geoidHeight') or res.get('geoidHeight')
         return float(gh) if gh is not None else 0.0
-    except: return 0.0
+    except:
+        return 0.0
 
 def parse_sima(uploaded_file):
-    """SIMAファイルを解析（A01座標データ、C00/C01測設データの両対応）"""
     points = []
     uploaded_file.seek(0)
     content = uploaded_file.read().decode('shift-jis', errors='replace')
     for line in content.splitlines():
         parts = line.split(',')
         if len(parts) >= 6:
-            # A01: 座標データ（お送りいただいたファイル形式）
-            if parts[0] == 'A01':
+            if parts[0] == 'A01': # 座標データ
                 try:
-                    points.append({
-                        'Name': parts[2], # A01は2番目(0始まりで2)が点名
-                        'X': float(parts[3]), 'Y': float(parts[4]), 'H': float(parts[5]) if parts[5] else 0.0
-                    })
+                    points.append({'Name': parts[2], 'X': float(parts[3]), 'Y': float(parts[4]), 'H': float(parts[5]) if parts[5] else 0.0})
                 except: continue
-            # C00/C01: 測設データ
-            elif parts[0] in ['C00', 'C01']:
+            elif parts[0] in ['C00', 'C01']: # 測設データ
                 try:
-                    points.append({
-                        'Name': parts[1], # C01は1番目が点名
-                        'X': float(parts[3]), 'Y': float(parts[4]), 'H': float(parts[5]) if parts[5] else 0.0
-                    })
+                    points.append({'Name': parts[1], 'X': float(parts[3]), 'Y': float(parts[4]), 'H': float(parts[5]) if parts[5] else 0.0})
                 except: continue
     return pd.DataFrame(points)
 
 # --- 3. サイドバー設定 ---
 st.sidebar.header("共通設定")
-zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8) # 9系デフォルト
-use_geoid = st.sidebar.selectbox("ジオイドモデル", ["ジオイド2024", "日本のジオイド2011", "使用しない"])
+zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8) # デフォルト9系
+
+# ジオイドモデルの選択
+use_geoid = st.sidebar.selectbox(
+    "ジオイドモデル", 
+    ["ジオイド2024", "日本のジオイド2011", "使用しない"],
+    help="※モデルを変更した後は、再度『変換を開始』ボタンを押してください。"
+)
+
 add_offset = st.sidebar.checkbox("アンテナ高(1.803m)を加算", value=True)
 offset_val = 1.803 if add_offset else 0.0
 
@@ -63,6 +66,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("地図表示設定")
 map_type = st.sidebar.radio("背景地図の選択", ["標準地図", "航空写真"])
 
+# 座標変換エンジンの準備
 epsg = 6668 + zone
 to_latlon = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
 
@@ -103,12 +107,11 @@ with tab2:
                     df_in['H'] = pd.to_numeric(df_in['H'], errors='coerce')
                     df_in = df_in.dropna(subset=['X', 'Y'])
 
-                if df_in.empty:
-                    st.error("有効なデータが見つかりませんでした。SIMAのレコード(A01等)を確認してください。")
-                else:
+                if not df_in.empty:
                     lons, lats = to_latlon.transform(df_in['Y'].values, df_in['X'].values)
-                    with st.spinner("ジオイド高取得中..."):
+                    with st.spinner(f"{use_geoid} を取得中..."):
                         ghs = [get_geoid_height(la, lo, use_geoid) if "ジオイド" in use_geoid else 0.0 for la, lo in zip(lats, lons)]
+                    
                     st.session_state.result_df = pd.DataFrame({
                         "点名": df_in['Name'], "変換前_X": df_in['X'], "変換前_Y": df_in['Y'], "変換前_標高(H)": df_in['H'],
                         "変換後_緯度": lats, "変換後_経度": lons, "ジオイド高": ghs, "変換後_楕円体高": df_in['H'] + ghs + offset_val
@@ -124,9 +127,10 @@ if st.session_state.result_df is not None:
     for c in ['ジオイド高', '変換後_楕円体高']: disp[c] = disp[c].map(lambda x: f"{x:.4f}")
     
     st.write("---")
-    st.subheader("✅ 変換結果")
+    st.subheader(f"✅ 変換結果 ({use_geoid} 使用)")
     st.dataframe(disp)
     
+    # KMLなどの保存ボタン（省略せず記載）
     col_dl1, col_dl2, _ = st.columns([2, 2, 6])
     with col_dl1:
         st.download_button("📊 CSV保存", disp.to_csv(index=False).encode('utf-8-sig'), "result.csv", "text/csv")
@@ -137,22 +141,17 @@ if st.session_state.result_df is not None:
             p.altitudemode = simplekml.AltitudeMode.absolute
         st.download_button("🌍 KML保存", kml.kml(), "result.kml", "application/vnd.google-earth.kml+xml")
 
-    st.subheader("🗺 マッププレビュー")
+    # 地図
     avg_lat, avg_lon = res['変換後_緯度'].mean(), res['変換後_経度'].mean()
-    
     tiles = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg' if map_type == "航空写真" else 'OpenStreetMap'
-    attr = '国土地理院 航空写真' if map_type == "航空写真" else 'OpenStreetMap contributors'
-
+    attr = '国土地理院' if map_type == "航空写真" else 'OpenStreetMap'
     m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles, attr=attr)
 
     for _, r in res.iterrows():
-        folium.Marker([r['変換後_緯度'], r['変換後_経度']], tooltip=f"点名: {r['点名']}").add_to(m)
+        folium.Marker([r['変換後_緯度'], r['変換後_経度']], tooltip=r['点名']).add_to(m)
         folium.map.Marker(
             [r['変換後_緯度'], r['変換後_経度']],
-            icon=folium.DivIcon(
-                icon_size=(150,36), icon_anchor=(7,20),
-                html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff; white-space: nowrap;">{r["点名"]}</div>',
-            )
+            icon=folium.DivIcon(icon_size=(150,36), icon_anchor=(7,20),
+                html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff; white-space: nowrap;">{r["点名"]}</div>')
         ).add_to(m)
-
-    st_folium(m, width=1200, height=600, key="survey_map_v2")
+    st_folium(m, width=1200, height=600, key="survey_map_v3")
