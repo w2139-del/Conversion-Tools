@@ -10,7 +10,7 @@ import hashlib
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="高精度座標変換ツール", layout="wide")
-st.title("高精度 座標変換ツール（表示バグ修正版）")
+st.title("高精度 座標変換ツール")
 
 # --- 2. ジオイドデータ読み込み（高速バイナリ版） ---
 @st.cache_resource
@@ -157,3 +157,4 @@ if 'result' in st.session_state:
     
     # 【重要】keyに計算回数を含めることで、データ更新時に地図を強制リフレッシュさせる
     st_folium(m, width=1200, height=600, key=f"map_calc_{st.session_state.get('calc_count', 0)}")
+
