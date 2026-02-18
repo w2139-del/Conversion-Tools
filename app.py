@@ -9,46 +9,45 @@ import os
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="座標変換ツール", layout="wide")
-st.title("高精度 座標変換ツール（全機能統合版）")
+st.title("高精度 座標変換ツール（プロ仕様）")
 
-# --- 2. ジオイドデータ読み込み関数 ---
+# --- 2. ジオイドデータ読み込み（高速バイナリ版） ---
 @st.cache_resource
 def load_geoid_data():
-    """圧縮されたジオイドデータを読み込む"""
     data = {}
     if os.path.exists('geoid2024.npz'):
         data['2024'] = np.load('geoid2024.npz')['grid']
     if os.path.exists('geoid2011.npz'):
         loader = np.load('geoid2011.npz')
         data['2011'] = loader['grid']
-        data['2011_h'] = loader['header'] # [lat_min, lon_min, d_lat, d_lon, rows, cols]
+        data['2011_h'] = loader['header']
     return data
 
 geoid_db = load_geoid_data()
 
 def get_geoid_height(lat, lon, model_name):
-    """内蔵データから線形補間でジオイド高を算出"""
-    if not geoid_db:
-        return 0.0
+    if not geoid_db: return 0.0
     try:
         if model_name == "ジオイド2024":
             g = geoid_db.get('2024')
             if g is None: return 0.0
             r = (50.0 - lat) / (1/60)
             c = (lon - 120.0) / (1.5/60)
-        else:
+        elif model_name == "日本のジオイド2011":
             g = geoid_db.get('2011')
             h = geoid_db.get('2011_h')
             if g is None or h is None: return 0.0
             r = (lat - h[0]) / h[2]
             c = (lon - h[1]) / h[3]
+        else:
+            return 0.0
 
         r0, c0 = int(np.floor(r)), int(np.floor(c))
         r1, c1 = r0 + 1, c0 + 1
-        v00, v01, v10, v11 = g[r0, c0], g[r0, c1], g[r1, c0], g[r1, c1]
-        if any(v > 900 for v in [v00, v01, v10, v11]): return 0.0
+        v = g[r0, c0], g[r0, c1], g[r1, c0], g[r1, c1]
+        if any(val > 900 for val in v): return 0.0
         dr, dc = r - r0, c - c0
-        return (1-dr)*(1-dc)*v00 + (1-dr)*dc*v01 + dr*(1-dc)*v10 + dr*dc*v11
+        return (1-dr)*(1-dc)*v[0] + (1-dr)*dc*v[1] + dr*(1-dc)*v[2] + dr*dc*v[3]
     except:
         return 0.0
 
@@ -65,7 +64,7 @@ def parse_sima(file):
                 points.append({'点名': p[1], 'X': float(p[3]), 'Y': float(p[4]), 'H': float(p[5])})
     return pd.DataFrame(points)
 
-# --- 4. サイドバー ---
+# --- 4. サイドバー設定 ---
 st.sidebar.header("共通設定")
 zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8)
 use_geoid = st.sidebar.selectbox("使用するジオイドモデル", ["ジオイド2024", "日本のジオイド2011", "使用しない"])
@@ -73,9 +72,9 @@ offset_val = 1.803 if st.sidebar.checkbox("アンテナ高(1.803m)加算", value
 
 st.sidebar.markdown("---")
 st.sidebar.header("地図表示設定")
-map_type = st.sidebar.radio("背景地図の選択", ["標準地図", "航空写真"])
+map_type = st.sidebar.radio("背景地図の選択", ["航空写真", "標準地図"])
 
-# 座標変換準備
+# 座標変換エンジン
 epsg = 6668 + zone
 transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
 
@@ -92,62 +91,7 @@ if uploaded_file:
                 df = df.rename(columns={df.columns[0]: '点名'})
             
             lons, lats = transformer.transform(df['Y'].values, df['X'].values)
-            ghs = [get_geoid_height(la, lo, use_geoid) if use_geoid != "使用しない" else 0.0 for la, lo in zip(lats, lons)]
+            ghs = [get_geoid_height(la, lo, use_geoid) for la, lo in zip(lats, lons)]
             
             res = pd.DataFrame({
-                "点名": df['点名'], "X": df['X'], "Y": df['Y'], "標高H": df['H'],
-                "緯度": lats, "経度": lons, "ジオイド高": ghs,
-                "楕円体高": df['H'].values + ghs + offset_val
-            })
-            st.session_state.result = res
-        except Exception as e:
-            st.error(f"エラー: {e}")
-
-# --- 6. 結果表示 ---
-if 'result' in st.session_state:
-    res = st.session_state.result
-    st.success(f"✅ 計算完了！ モデル: {use_geoid}")
-    
-    disp = res.copy()
-    for c in ['緯度', '経度']: disp[c] = disp[c].map(lambda x: f"{x:.8f}")
-    for c in ['ジオイド高', '楕円体高']: disp[c] = disp[c].map(lambda x: f"{x:.4f}")
-    st.dataframe(disp, use_container_width=True)
-    
-    col1, col2, _ = st.columns([2, 2, 6])
-    with col1:
-        st.download_button("📊 CSV保存", disp.to_csv(index=False).encode('utf-8-sig'), "result.csv", "text/csv")
-    with col2:
-        kml = simplekml.Kml()
-        for _, r in res.iterrows():
-            kml.newpoint(name=str(r['点名']), coords=[(r['経度'], r['緯度'], r['楕円体高'])])
-        st.download_button("🌍 KML保存", kml.kml(), "result.kml", "application/vnd.google-earth.kml+xml")
-
-    # --- 地図表示（ラベル付き） ---
-    st.subheader("🗺 マッププレビュー")
-    avg_lat, avg_lon = res['緯度'].mean(), res['経度'].mean()
-    
-    # 地図のタイルの設定
-    if map_type == "航空写真":
-        tiles = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
-        attr = "地理院タイル"
-    else:
-        tiles = "OpenStreetMap"
-        attr = "OpenStreetMap contributors"
-
-    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles, attr=attr)
-    
-    for _, r in res.iterrows():
-        # 通常のマーカー（クリックで点名表示）
-        folium.Marker([r['緯度'], r['経度']], tooltip=str(r['点名'])).add_to(m)
-        
-        # 永久表示のラベル（DivIconを使用）
-        folium.map.Marker(
-            [r['緯度'], r['経度']],
-            icon=folium.DivIcon(
-                icon_size=(150, 36),
-                icon_anchor=(7, 20),
-                html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff; white-space: nowrap;">{r["点名"]}</div>'
-            )
-        ).add_to(m)
-        
-    st_folium(m, width=1200, height=500)
+                "点名": df['点名'], "X": df['X
