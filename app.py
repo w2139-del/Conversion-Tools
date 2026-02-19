@@ -10,7 +10,7 @@ import time
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="高精度座標変換ツール", layout="wide")
-st.title("高精度 座標変換ツール（修正版）")
+st.title("高精度 座標変換ツール")
 
 # --- 2. ジオイド計算エンジン ---
 
@@ -174,3 +174,4 @@ if 'result' in st.session_state:
         st_folium(m, width=1200, height=550, key=f"map_{st.session_state.calc_id}")
     else:
         st.warning("⚠️ 座標が正しくないため地図を表示できません。系番号を確認してください。")
+
