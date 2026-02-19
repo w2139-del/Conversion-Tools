@@ -48,14 +48,48 @@ def get_geoid_height(lat, lon, model_name):
     except: return 0.0
 
 # --- 3. サイドバー設定 ---
-st.sidebar.header("共通設定")
+st.sidebar.header("⚙️ 共通設定")
 zone = st.sidebar.selectbox("系番号 (1-19系)", list(range(1, 20)), index=8)
 use_geoid = st.sidebar.selectbox("使用するジオイドモデル", ["日本のジオイド2011", "ジオイド2024", "使用しない"], index=1)
 is_antenna = st.sidebar.checkbox("アンテナ高(1.803m)加算", value=True)
 offset_val = 1.803 if (is_antenna and use_geoid != "使用しない") else 0.0
 
 st.sidebar.markdown("---")
+st.sidebar.header("🗺 地図表示")
 map_type = st.sidebar.radio("背景地図", ["航空写真", "標準地図"])
+
+# --- 【新機能】サイドバーへのダウンロードボタン配置 ---
+if 'result' in st.session_state:
+    st.sidebar.markdown("---")
+    st.sidebar.header("💾 成果品エクスポート")
+    
+    # ダウンロード用データの準備
+    res = st.session_state.result
+    disp_csv = res.copy()
+    for c in ['緯度', '経度']: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.8f}")
+    for c in ['ジオイド高', '楕円体高', 'X', 'Y', '標高H']: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
+    
+    # CSVボタン
+    st.sidebar.download_button(
+        label="📊 CSVファイルを保存",
+        data=disp_csv.to_csv(index=False).encode('utf-8-sig'),
+        file_name=f"conversion_result_{int(time.time())}.csv",
+        mime='text/csv',
+        use_container_width=True
+    )
+    
+    # KMLボタン
+    kml = simplekml.Kml()
+    for _, r in res.iterrows():
+        kml.newpoint(name=str(r['点名']), coords=[(r['経度'], r['緯度'], r['楕円体高'])])
+    
+    st.sidebar.download_button(
+        label="🌍 KMLファイルを保存",
+        data=kml.kml(),
+        file_name=f"spatial_data_{int(time.time())}.kml",
+        mime='application/vnd.google-earth.kml+xml',
+        use_container_width=True
+    )
 
 # 座標変換準備
 transformer = Transformer.from_crs(f"EPSG:{6668 + zone}", "EPSG:4326", always_xy=True)
@@ -64,109 +98,4 @@ transformer = Transformer.from_crs(f"EPSG:{6668 + zone}", "EPSG:4326", always_xy
 tab1, tab2 = st.tabs(["📝 1点手入力", "📂 ファイル一括変換"])
 
 def run_calc(input_df):
-    if input_df.empty: return
-    lons, lats = transformer.transform(input_df['Y'].values, input_df['X'].values)
-    ghs = [get_geoid_height(la, lo, use_geoid) for la, lo in zip(lats, lons)]
-    
-    st.session_state.result = pd.DataFrame({
-        "点名": input_df['点名'], "X": input_df['X'], "Y": input_df['Y'], "標高H": input_df['H'],
-        "緯度": lats, "経度": lons, "ジオイド高": ghs,
-        "楕円体高": input_df['H'].values + np.array(ghs) + offset_val,
-        "適用モデル": use_geoid
-    })
-    # 計算ごとにユニークなIDを発行して地図を強制更新
-    st.session_state.calc_id = f"{time.time()}_{map_type}"
-
-with tab1:
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: name = st.text_input("点名", "Point_1")
-    with c2: x_val = st.number_input("X座標", value=0.0, format="%.4f")
-    with c3: y_val = st.number_input("Y座標", value=0.0, format="%.4f")
-    with c4: h_val = st.number_input("標高H", value=0.0, format="%.4f")
-    if st.button("この地点を計算"):
-        run_calc(pd.DataFrame([{"点名": name, "X": x_val, "Y": y_val, "H": h_val}]))
-
-with tab2:
-    uploaded_file = st.file_uploader("CSV/SIMAをアップロード", type=["csv", "sim"])
-    if uploaded_file and st.button("一括変換を開始 🚀"):
-        try:
-            if uploaded_file.name.lower().endswith('.sim'):
-                points = []
-                content = uploaded_file.read().decode('shift-jis', errors='replace')
-                for line in content.splitlines():
-                    p = line.split(',')
-                    if len(p) >= 6 and p[0] in ['A01', 'C00', 'C01']:
-                        points.append({'点名': p[1] if p[0].startswith('C') else p[2], 'X': float(p[3]), 'Y': float(p[4]), 'H': float(p[5])})
-                df_raw = pd.DataFrame(points)
-            else:
-                df_raw = pd.read_csv(uploaded_file, encoding='shift-jis')
-                df_raw = df_raw.rename(columns={df_raw.columns[0]: '点名', df_raw.columns[1]: 'X', df_raw.columns[2]: 'Y', df_raw.columns[3]: 'H'})
-            run_calc(df_raw)
-        except Exception as e: st.error(f"解析エラー: {e}")
-
-# --- 5. 結果表示とマップ ---
-if 'result' in st.session_state:
-    res = st.session_state.result
-    st.divider()
-    
-    if use_geoid == "使用しない":
-        st.info("ℹ️ ジオイドおよびアンテナ高を0として計算しています（標高＝楕円体高）。")
-
-    # データテーブル
-    disp = res.copy()
-    for c in ['緯度', '経度']: disp[c] = disp[c].map(lambda x: f"{x:.8f}")
-    for c in ['ジオイド高', '楕円体高', 'X', 'Y', '標高H']: disp[c] = disp[c].map(lambda x: f"{x:.4f}")
-    st.dataframe(disp, use_container_width=True)
-    
-    # マッププレビュー（ここが修正の核心）
-    st.subheader("🗺 マッププレビュー")
-    valid_res = res[(res['緯度'] > 20) & (res['経度'] > 120)]
-    
-    if not valid_res.empty:
-        avg_lat, avg_lon = valid_res['緯度'].mean(), valid_res['経度'].mean()
-        
-        # タイル設定
-        tiles = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg' if map_type == "航空写真" else "OpenStreetMap"
-        attr = "GSI" if map_type == "航空写真" else "OpenStreetMap"
-        
-        # 地図オブジェクトの新規作成
-        m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles, attr=attr)
-        
-        # マーカーをグループ化して追加（レンダリングの安定化）
-        fg = folium.FeatureGroup(name="Points")
-        for _, r in valid_res.iterrows():
-            # 1. ピンの追加
-            folium.Marker(
-                location=[r['緯度'], r['経度']],
-                popup=f"<b>{r['点名']}</b><br>楕円体高: {r['楕円体高']:.3f}m",
-                tooltip=str(r['点名'])
-            ).add_to(fg)
-            
-            # 2. ラベルの追加
-            folium.Marker(
-                [r['緯度'], r['経度']],
-                icon=folium.DivIcon(
-                    icon_size=(150, 30),
-                    icon_anchor=(7, 25),
-                    html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff; white-space: nowrap;">{r["点名"]}</div>'
-                )
-            ).add_to(fg)
-        
-        fg.add_to(m)
-        
-        # st_foliumの描画。keyにcalc_idを含めることで強制リフレッシュさせる
-        st_folium(
-            m, 
-            width=1200, 
-            height=550, 
-            key=st.session_state.calc_id, 
-            returned_objects=[] # 不要な戻り値をカットして高速化
-        )
-    
-    # ダウンロード
-    col1, col2, _ = st.columns([2, 2, 6])
-    with col1: st.download_button("📊 CSV保存", disp.to_csv(index=False).encode('utf-8-sig'), "result.csv")
-    with col2:
-        kml = simplekml.Kml()
-        for _, r in res.iterrows(): kml.newpoint(name=str(r['点名']), coords=[(r['経度'], r['緯度'], r['楕円体高'])])
-        st.download_button("🌍 KML保存", kml.kml(), "result.kml")
+    if input_df.empty
