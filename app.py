@@ -10,7 +10,7 @@ import time
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="高精度座標変換ツール", layout="wide")
-st.title("高精度 座標変換ツール（度分秒対応版）")
+st.title("高精度 座標変換ツール")
 
 # --- 2. ユーティリティ関数（度分秒変換） ---
 def decimal_to_dms(deg):
@@ -197,3 +197,4 @@ if 'result' in st.session_state:
             ).add_to(fg)
         fg.add_to(m)
         st_folium(m, width=1200, height=600, key=st.session_state.calc_id, returned_objects=[])
+
