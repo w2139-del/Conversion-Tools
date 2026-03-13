@@ -54,6 +54,12 @@ def get_geoid_height(lat, lon, model_name):
         return round((1-dr)*(1-dc)*v[0] + (1-dr)*dc*v[1] + dr*(1-dc)*v[2] + dr*dc*v[3], 4)
     except: return 0.0
 
+# --- セッション状態の初期化 ---
+if 'drawn_data' not in st.session_state:
+    st.session_state.drawn_data = None
+if 'result' not in st.session_state:
+    st.session_state.result = None
+
 # --- 3. サイドバー設定 ---
 st.sidebar.header("💾 成果品保存")
 
@@ -64,11 +70,11 @@ kml_export_type = st.sidebar.selectbox(
     index=0
 )
 
-if 'result' in st.session_state:
+if st.session_state.result is not None:
     res_data = st.session_state.result
     latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
     
-    # CSV保存ボタン
+    # CSV保存処理
     disp_csv = res_data.copy()
     if latlon_format == "60進法 (DMS)":
         disp_csv['緯度'] = disp_csv['緯度'].map(decimal_to_dms)
@@ -94,13 +100,12 @@ if 'result' in st.session_state:
             pnt_folder.newpoint(name=str(r['点名']), coords=[(r['経度'], r['緯度'], r['楕円体高'])])
             
     # ポリゴンの追加 (描画データがある場合)
-    if "ポリゴン" in kml_export_type and 'drawn_data' in st.session_state:
+    if "ポリゴン" in kml_export_type and st.session_state.drawn_data:
         poly_folder = kml.newfolder(name="Polygons")
         features = st.session_state.drawn_data.get('all_drawings', [])
         for i, feat in enumerate(features):
             geom = feat.get('geometry', {})
             if geom.get('type') == 'Polygon':
-                # coordsは [[lon, lat], [lon, lat], ...]
                 coords = geom.get('coordinates', [[]])[0]
                 poly = poly_folder.newpolygon(name=f"Polygon_{i+1}")
                 poly.outerboundaryis = coords
@@ -118,6 +123,10 @@ if 'result' in st.session_state:
         file_name=f"spatial_data_{int(time.time())}.kml",
         mime='application/vnd.google-earth.kml+xml', use_container_width=True
     )
+    
+    if st.sidebar.button("描画図形を全消去"):
+        st.session_state.drawn_data = None
+        st.rerun()
 else:
     st.sidebar.info("計算を実行すると保存ボタンが表示されます。")
 
@@ -143,7 +152,6 @@ def run_calculation_process(input_df):
         "楕円体高": input_df['H'].values + np.array(ghs) + offset_val,
         "適用モデル": use_geoid
     })
-    st.session_state.calc_id = f"{time.time()}_{map_type}"
     st.rerun()
 
 with tab1:
@@ -178,31 +186,30 @@ with tab3:
     ### 📖 操作ガイド
     1. **座標変換**: 『1点入力』または『ファイル一括』で計算を実行します。
     2. **マップ表示**: 変換が完了すると、自動的に計算地点にピンが立ちます。
-    3. **ポリゴン描画**: マップ左側の **『五角形のアイコン』** をクリックし、地図上をクリックして図形を描きます。
-    4. **ダブルクリックで確定**: 図形を描き終えたら、最後の点でダブルクリックすると確定します。
-    5. **エクスポート**: サイドバーの **『KML出力対象を選択』** で『両方』などを選び、『KMLを保存』を押すと、ピンと図形がセットでダウンロードされます。
+    3. **ポリゴン描画**: 地図左側のアイコンで図形を描きます。
+    4. **編集と保存**: 
+       - 図形を描いた後、**「Edit layers」**ボタン（四角とペンのアイコン）で頂点を動かせます。
+       - **重要：編集後は必ず「Save」ボタンを押してください。**
+    5. **エクスポート**: サイドバーの『KMLを保存』からダウンロードしてください。
     """)
 
 # --- 5. 結果表示 & マップ描画 ---
-if 'result' in st.session_state:
+if st.session_state.result is not None:
     res = st.session_state.result
     st.divider()
     
-    # データテーブル表示
-    res_disp = res.copy()
-    # (緯度経度の表示形式処理は省略せず継続)
-    # ...
-    st.dataframe(res_disp, use_container_width=True)
+    # 簡易表示用テーブル
+    st.dataframe(res, use_container_width=True)
     
-    # マップセクション
     st.subheader("🗺 マッププレビュー & 描画ツール")
     valid_map_data = res[(res['緯度'] > 20) & (res['経度'] > 120)]
     if not valid_map_data.empty:
         avg_lat, avg_lon = valid_map_data['緯度'].mean(), valid_map_data['経度'].mean()
         tiles_url = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg' if map_type == "航空写真" else "OpenStreetMap"
+        
         m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles_url, attr="GSI")
         
-        # 既存のポイントを描画
+        # 1. 変換済みポイントを描画
         fg = folium.FeatureGroup(name="Markers")
         for _, row in valid_map_data.iterrows():
             folium.Marker([row['緯度'], row['経度']], popup=f"{row['点名']}", tooltip=str(row['点名'])).add_to(fg)
@@ -210,25 +217,28 @@ if 'result' in st.session_state:
                 html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff;">{row["点名"]}</div>')
             ).add_to(fg)
         fg.add_to(m)
+
+        # 2. 過去に描いた図形を再表示（これがないと編集時に消えてしまう）
+        if st.session_state.drawn_data is not None:
+            for feat in st.session_state.drawn_data.get('all_drawings', []):
+                folium.GeoJson(feat).add_to(m)
         
-        # 修正ポイント: 描画ツール（Draw）の追加
+        # 3. 描画・編集ツールの追加
         draw = Draw(
             export=False,
             draw_options={
-                'polyline': True,
-                'rectangle': True,
-                'polygon': True,
-                'circle': False,
-                'marker': False,
-                'circlemarker': False,
+                'polyline': True, 'rectangle': True, 'polygon': True,
+                'circle': False, 'marker': False, 'circlemarker': False,
             },
-            edit_options={'edit': True}
+            edit_options={'edit': True, 'remove': True}
         )
         draw.add_to(m)
         
-        # マップの表示と描画データのキャッチ
-        output = st_folium(m, width=1200, height=600, key=st.session_state.calc_id)
+        # マップ表示とデータの受け取り
+        output = st_folium(m, width=1200, height=600, key="map_main")
         
-        # 描画されたデータをセッションに保存（KML出力用）
-        if output.get('all_drawings'):
-            st.session_state.drawn_data = output
+        # 描画データが更新されたら保存（編集・削除後の「Save」クリック時に反応）
+        if output.get('all_drawings') is not None:
+            if st.session_state.drawn_data != output:
+                st.session_state.drawn_data = output
+                st.rerun()
