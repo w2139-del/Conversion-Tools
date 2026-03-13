@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from pyproj import Transformer
 import folium
-from folium.plugins import Draw
 from streamlit_folium import st_folium
 import simplekml
 import os
@@ -11,16 +10,18 @@ import time
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="高精度座標変換ツール", layout="wide")
-st.title("高精度 座標変換ツール（ポリゴン描画＆KML高度エクスポート版）")
+st.title("高精度 座標変換ツール（度分秒対応版）")
 
-# --- 2. ユーティリティ関数 ---
+# --- 2. ユーティリティ関数（度分秒変換） ---
 def decimal_to_dms(deg):
     """10進法を度分秒(DMS)文字列に変換"""
     d = int(deg)
     m = int((deg - d) * 60)
     s = (deg - d - m/60) * 3600
+    # 秒の小数点以下は4桁に固定
     return f"{d}°{m:02d}'{s:07.4f}\""
 
+# --- 3. ジオイド計算エンジン ---
 @st.cache_resource
 def load_geoid_data():
     data = {}
@@ -54,81 +55,49 @@ def get_geoid_height(lat, lon, model_name):
         return round((1-dr)*(1-dc)*v[0] + (1-dr)*dc*v[1] + dr*(1-dc)*v[2] + dr*dc*v[3], 4)
     except: return 0.0
 
-# --- セッション状態の初期化 ---
-if 'drawn_data' not in st.session_state:
-    st.session_state.drawn_data = None
-if 'result' not in st.session_state:
-    st.session_state.result = None
-
-# --- 3. サイドバー設定 ---
+# --- 4. サイドバー設定 ---
 st.sidebar.header("💾 成果品保存")
-
-# KML出力設定
-kml_export_type = st.sidebar.selectbox(
-    "KML出力対象を選択",
-    ["ポイントとポリゴンの両方", "ポイントのみ", "ポリゴンのみ"],
-    index=0
-)
-
-if st.session_state.result is not None:
+if 'result' in st.session_state:
     res_data = st.session_state.result
-    latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
+    # 後続の表示形式設定を取得
+    latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0, key="fmt_select")
     
-    # CSV保存処理
+    # 保存用データ作成（表示形式に合わせて加工）
     disp_csv = res_data.copy()
     if latlon_format == "60進法 (DMS)":
         disp_csv['緯度'] = disp_csv['緯度'].map(decimal_to_dms)
         disp_csv['経度'] = disp_csv['経度'].map(decimal_to_dms)
     else:
         for c in ['緯度', '経度']: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.8f}")
-    for c in ['ジオイド高', '楕円体高', 'X', 'Y', '標高H']: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
+    
+    for c in ['ジオイド高', '楕円体高', 'X', 'Y', '標高H']: 
+        disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
     
     st.sidebar.download_button(
         label="📊 CSVを保存",
         data=disp_csv.to_csv(index=False).encode('utf-8-sig'),
         file_name=f"result_{int(time.time())}.csv",
-        mime='text/csv', use_container_width=True
+        mime='text/csv',
+        use_container_width=True,
+        key="side_csv"
     )
     
-    # KML生成ロジック
     kml = simplekml.Kml()
+    for _, r in res_data.iterrows():
+        # KMLは内部仕様上、常に10進法で出力
+        kml.newpoint(name=str(r['点名']), coords=[(r['経度'], r['緯度'], r['楕円体高'])])
     
-    # ポイントの追加
-    if "ポイント" in kml_export_type:
-        pnt_folder = kml.newfolder(name="Points")
-        for _, r in res_data.iterrows():
-            pnt_folder.newpoint(name=str(r['点名']), coords=[(r['経度'], r['緯度'], r['楕円体高'])])
-            
-    # ポリゴンの追加 (描画データがある場合)
-    if "ポリゴン" in kml_export_type and st.session_state.drawn_data:
-        poly_folder = kml.newfolder(name="Polygons")
-        features = st.session_state.drawn_data.get('all_drawings', [])
-        for i, feat in enumerate(features):
-            geom = feat.get('geometry', {})
-            if geom.get('type') == 'Polygon':
-                coords = geom.get('coordinates', [[]])[0]
-                poly = poly_folder.newpolygon(name=f"Polygon_{i+1}")
-                poly.outerboundaryis = coords
-                poly.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.cyan)
-            elif geom.get('type') == 'LineString':
-                coords = geom.get('coordinates', [])
-                line = poly_folder.newlinestring(name=f"Line_{i+1}")
-                line.coords = coords
-                line.style.linestyle.color = simplekml.Color.red
-                line.style.linestyle.width = 3
-
     st.sidebar.download_button(
         label="🌍 KMLを保存",
         data=kml.kml(),
-        file_name=f"spatial_data_{int(time.time())}.kml",
-        mime='application/vnd.google-earth.kml+xml', use_container_width=True
+        file_name=f"result_{int(time.time())}.kml",
+        mime='application/vnd.google-earth.kml+xml',
+        use_container_width=True,
+        key="side_kml"
     )
-    
-    if st.sidebar.button("描画図形を全消去"):
-        st.session_state.drawn_data = None
-        st.rerun()
 else:
-    st.sidebar.info("計算を実行すると保存ボタンが表示されます。")
+    st.sidebar.info("計算を実行するとここに保存ボタンが表示されます。")
+    latlon_format = "10進法 (DD)" # デフォルト値
 
 st.sidebar.markdown("---")
 st.sidebar.header("⚙️ 変換設定")
@@ -138,9 +107,9 @@ is_antenna = st.sidebar.checkbox("アンテナ高(1.803m)加算", value=True)
 offset_val = 1.803 if (is_antenna and use_geoid != "使用しない") else 0.0
 map_type = st.sidebar.radio("背景地図", ["航空写真", "標準地図"])
 
-# --- 4. メインコンテンツ ---
+# --- 5. メインコンテンツ ---
 transformer = Transformer.from_crs(f"EPSG:{6668 + zone}", "EPSG:4326", always_xy=True)
-tab1, tab2, tab3 = st.tabs(["📝 1点手入力変換", "📂 ファイル一括変換", "📖 操作マニュアル"])
+tab1, tab2 = st.tabs(["📝 1点手入力変換", "📂 ファイル一括変換"])
 
 def run_calculation_process(input_df):
     if input_df.empty: return
@@ -152,6 +121,7 @@ def run_calculation_process(input_df):
         "楕円体高": input_df['H'].values + np.array(ghs) + offset_val,
         "適用モデル": use_geoid
     })
+    st.session_state.calc_id = f"{time.time()}_{map_type}"
     st.rerun()
 
 with tab1:
@@ -181,64 +151,49 @@ with tab2:
             run_calculation_process(df_input)
         except Exception as e: st.error(f"エラー: {e}")
 
-with tab3:
-    st.markdown("""
-    ### 📖 操作ガイド
-    1. **座標変換**: 『1点入力』または『ファイル一括』で計算を実行します。
-    2. **マップ表示**: 変換が完了すると、自動的に計算地点にピンが立ちます。
-    3. **ポリゴン描画**: 地図左側のアイコンで図形を描きます。
-    4. **編集と保存**: 
-       - 図形を描いた後、**「Edit layers」**ボタン（四角とペンのアイコン）で頂点を動かせます。
-       - **重要：編集後は必ず「Save」ボタンを押してください。**
-    5. **エクスポート**: サイドバーの『KMLを保存』からダウンロードしてください。
-    """)
-
-# --- 5. 結果表示 & マップ描画 ---
-if st.session_state.result is not None:
+# --- 6. 結果表示 ---
+if 'result' in st.session_state:
     res = st.session_state.result
     st.divider()
     
-    # 簡易表示用テーブル
-    st.dataframe(res, use_container_width=True)
+    # メイン画面の保存ボタン
+    c1, c2, _ = st.columns([1.5, 1.5, 7])
+    with c1: st.download_button("📊 CSV保存", disp_csv.to_csv(index=False).encode('utf-8-sig'), f"res_{int(time.time())}.csv", key="main_csv")
+    with c2: st.download_button("🌍 KML保存", kml.kml(), f"res_{int(time.time())}.kml", key="main_kml")
+
+    # データテーブル表示用整形
+    res_disp = res.copy()
+    if latlon_format == "60進法 (DMS)":
+        res_disp['緯度'] = res_disp['緯度'].map(decimal_to_dms)
+        res_disp['経度'] = res_disp['経度'].map(decimal_to_dms)
+    else:
+        for c in ['緯度', '経度']: res_disp[c] = res_disp[c].map(lambda x: f"{x:.8f}")
     
-    st.subheader("🗺 マッププレビュー & 描画ツール")
+    for c in ['ジオイド高', '楕円体高', 'X', 'Y', '標高H']: 
+        res_disp[c] = res_disp[c].map(lambda x: f"{x:.4f}")
+    
+    st.dataframe(res_disp, use_container_width=True)
+    
+    # マップ
     valid_map_data = res[(res['緯度'] > 20) & (res['経度'] > 120)]
     if not valid_map_data.empty:
         avg_lat, avg_lon = valid_map_data['緯度'].mean(), valid_map_data['経度'].mean()
         tiles_url = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg' if map_type == "航空写真" else "OpenStreetMap"
-        
         m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles_url, attr="GSI")
-        
-        # 1. 変換済みポイントを描画
         fg = folium.FeatureGroup(name="Markers")
         for _, row in valid_map_data.iterrows():
-            folium.Marker([row['緯度'], row['経度']], popup=f"{row['点名']}", tooltip=str(row['点名'])).add_to(fg)
+            # ポップアップには設定されている方の形式を表示
+            pop_lat = decimal_to_dms(row['緯度']) if latlon_format == "60進法 (DMS)" else f"{row['緯度']:.8f}"
+            pop_lon = decimal_to_dms(row['経度']) if latlon_format == "60進法 (DMS)" else f"{row['経度']:.8f}"
+            
+            folium.Marker(
+                [row['緯度'], row['経度']], 
+                popup=f"<b>{row['点名']}</b><br>緯度: {pop_lat}<br>経度: {pop_lon}", 
+                tooltip=str(row['点名'])
+            ).add_to(fg)
+            
             folium.Marker([row['緯度'], row['経度']], icon=folium.DivIcon(icon_size=(150,30), icon_anchor=(7,25),
                 html=f'<div style="font-size: 11pt; color: red; font-weight: bold; text-shadow: 2px 2px 2px #fff;">{row["点名"]}</div>')
             ).add_to(fg)
         fg.add_to(m)
-
-        # 2. 過去に描いた図形を再表示（これがないと編集時に消えてしまう）
-        if st.session_state.drawn_data is not None:
-            for feat in st.session_state.drawn_data.get('all_drawings', []):
-                folium.GeoJson(feat).add_to(m)
-        
-        # 3. 描画・編集ツールの追加
-        draw = Draw(
-            export=False,
-            draw_options={
-                'polyline': True, 'rectangle': True, 'polygon': True,
-                'circle': False, 'marker': False, 'circlemarker': False,
-            },
-            edit_options={'edit': True, 'remove': True}
-        )
-        draw.add_to(m)
-        
-        # マップ表示とデータの受け取り
-        output = st_folium(m, width=1200, height=600, key="map_main")
-        
-        # 描画データが更新されたら保存（編集・削除後の「Save」クリック時に反応）
-        if output.get('all_drawings') is not None:
-            if st.session_state.drawn_data != output:
-                st.session_state.drawn_data = output
-                st.rerun()
+        st_folium(m, width=1200, height=600, key=st.session_state.calc_id, returned_objects=[])
