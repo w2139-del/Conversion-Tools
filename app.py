@@ -68,8 +68,13 @@ kml_export_type = st.sidebar.selectbox(
     index=0
 )
 
+# ★修正: latlon_format をサイドバーの条件外で先に定義しておく
+latlon_format = "10進法 (DD)"
+
 if 'result' in st.session_state:
     res_data = st.session_state.result
+
+    # ★修正: latlon_format をここで定義し、テーブル表示でも参照できるようにする
     latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
 
     # CSV保存ボタン
@@ -159,7 +164,7 @@ def run_calculation_process(input_df):
         "楕円体高": input_df['H'].values + np.array(ghs) + offset_val,
         "適用モデル": use_geoid
     })
-    # ★修正: マップのkeyを固定にする（再計算のたびにリセットされないよう）
+    # マップのkeyを固定（再計算のたびにリセットされないよう）
     if 'map_key' not in st.session_state:
         st.session_state.map_key = "folium_map_fixed"
     st.rerun()
@@ -223,8 +228,17 @@ if 'result' in st.session_state:
     res = st.session_state.result
     st.divider()
 
-    # データテーブル表示
+    # ★修正: テーブル表示にも緯度経度の形式変換を適用
     res_disp = res.copy()
+    if latlon_format == "60進法 (DMS)":
+        res_disp['緯度'] = res_disp['緯度'].map(decimal_to_dms)
+        res_disp['経度'] = res_disp['経度'].map(decimal_to_dms)
+    else:
+        res_disp['緯度'] = res_disp['緯度'].map(lambda x: f"{x:.8f}")
+        res_disp['経度'] = res_disp['経度'].map(lambda x: f"{x:.8f}")
+    for c in ['ジオイド高', '楕円体高', 'X', 'Y', '標高H']:
+        res_disp[c] = res_disp[c].map(lambda x: f"{x:.4f}")
+
     st.dataframe(res_disp, use_container_width=True)
 
     # マップセクション
@@ -261,7 +275,7 @@ if 'result' in st.session_state:
             ).add_to(fg)
         fg.add_to(m)
 
-        # ★修正: Draw プラグインの edit_options を正しい形式に修正
+        # Draw プラグイン（edit_options を正しい形式で指定）
         draw = Draw(
             export=False,
             draw_options={
@@ -273,13 +287,13 @@ if 'result' in st.session_state:
                 'circlemarker': False,
             },
             edit_options={
-                'edit': {},    # ★ True ではなく空辞書を渡す
-                'remove': {}   # ★ 削除ボタンも有効化
+                'edit': {},
+                'remove': {}
             }
         )
         draw.add_to(m)
 
-        # ★修正: key を固定して描画データがリセットされないようにする
+        # key を固定して描画データがリセットされないようにする
         map_key = st.session_state.get('map_key', 'folium_map_fixed')
         output = st_folium(m, width=1200, height=600, key=map_key)
 
