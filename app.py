@@ -11,7 +11,7 @@ import time
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="高精度座標変換ツール", layout="wide")
-st.title("高精度 座標変換ツール")
+st.title("座標変換ツール")
 
 # --- 2. ユーティリティ関数 ---
 def decimal_to_dms(deg):
