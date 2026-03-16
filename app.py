@@ -58,26 +58,71 @@ def get_geoid_height(lat, lon, model_name):
     except:
         return 0.0
 
+def run_calculation_single(point_name, lat, lon, h_val, geoid_model, ant_offset):
+    """緯度経度から1点分の結果行を生成する（マップクリック追加用）"""
+    gh = get_geoid_height(lat, lon, geoid_model)
+    return {
+        "点名": point_name,
+        "X": 0.0,
+        "Y": 0.0,
+        "標高H": h_val,
+        "緯度": lat,
+        "経度": lon,
+        "ジオイド高": gh,
+        "楕円体高": h_val + gh + ant_offset,
+        "適用モデル": geoid_model
+    }
+
+# ★追加: CSVのヘッダー有無を自動判定して読み込む関数
+def read_csv_auto(uploaded_file):
+    """
+    1行目が数値データ → ヘッダーなしと判断して1点目から読み込む
+    1行目が文字列   → ヘッダーありと判断してフィールド名として扱う
+    """
+    uploaded_file.seek(0)
+    first_line = uploaded_file.readline().decode('shift-jis', errors='replace').strip()
+    uploaded_file.seek(0)
+
+    cols = first_line.split(',')
+    # 2列目以降が数値かどうかで判定（点名は文字列でも可）
+    try:
+        float(cols[1])
+        float(cols[2])
+        # 数値 → ヘッダーなし
+        df = pd.read_csv(uploaded_file, encoding='shift-jis', header=None)
+    except (ValueError, IndexError):
+        # 文字列 → ヘッダーあり
+        df = pd.read_csv(uploaded_file, encoding='shift-jis', header=0)
+
+    # 列数チェック
+    if df.shape[1] < 4:
+        raise ValueError("CSVは最低4列（点名, X, Y, H）必要です。")
+
+    df = df.iloc[:, :4]
+    df.columns = ['点名', 'X', 'Y', 'H']
+    df['X'] = pd.to_numeric(df['X'], errors='coerce')
+    df['Y'] = pd.to_numeric(df['Y'], errors='coerce')
+    df['H'] = pd.to_numeric(df['H'], errors='coerce')
+    df = df.dropna(subset=['X', 'Y', 'H'])
+    return df
+
 # --- 3. サイドバー設定 ---
 st.sidebar.header("💾 成果品保存")
 
-# KML出力設定
 kml_export_type = st.sidebar.selectbox(
     "KML出力対象を選択",
     ["ポイントとポリゴンの両方", "ポイントのみ", "ポリゴンのみ"],
     index=0
 )
 
-# ★修正: latlon_format をサイドバーの条件外で先に定義しておく
+# latlon_format を先に定義しておく（テーブル表示でも参照するため）
 latlon_format = "10進法 (DD)"
 
 if 'result' in st.session_state:
     res_data = st.session_state.result
-
-    # ★修正: latlon_format をここで定義し、テーブル表示でも参照できるようにする
     latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
 
-    # CSV保存ボタン
+    # CSV保存
     disp_csv = res_data.copy()
     if latlon_format == "60進法 (DMS)":
         disp_csv['緯度'] = disp_csv['緯度'].map(decimal_to_dms)
@@ -96,10 +141,8 @@ if 'result' in st.session_state:
         use_container_width=True
     )
 
-    # KML生成ロジック
+    # KML生成
     kml = simplekml.Kml()
-
-    # ポイントの追加
     if "ポイント" in kml_export_type:
         pnt_folder = kml.newfolder(name="Points")
         for _, r in res_data.iterrows():
@@ -107,8 +150,6 @@ if 'result' in st.session_state:
                 name=str(r['点名']),
                 coords=[(r['経度'], r['緯度'], r['楕円体高'])]
             )
-
-    # ポリゴンの追加 (描画データがある場合)
     if "ポリゴン" in kml_export_type and 'drawn_data' in st.session_state:
         poly_folder = kml.newfolder(name="Polygons")
         features = st.session_state.drawn_data.get('all_drawings', [])
@@ -146,6 +187,9 @@ map_type = st.sidebar.radio("背景地図", ["航空写真", "標準地図"])
 
 # --- 4. メインコンテンツ ---
 transformer = Transformer.from_crs(f"EPSG:{6668 + zone}", "EPSG:4326", always_xy=True)
+# 逆変換用（緯度経度 → 平面直角座標）
+transformer_inv = Transformer.from_crs("EPSG:4326", f"EPSG:{6668 + zone}", always_xy=True)
+
 tab1, tab2, tab3 = st.tabs(["📝 1点手入力変換", "📂 ファイル一括変換", "📖 操作マニュアル"])
 
 def run_calculation_process(input_df):
@@ -164,7 +208,6 @@ def run_calculation_process(input_df):
         "楕円体高": input_df['H'].values + np.array(ghs) + offset_val,
         "適用モデル": use_geoid
     })
-    # マップのkeyを固定（再計算のたびにリセットされないよう）
     if 'map_key' not in st.session_state:
         st.session_state.map_key = "folium_map_fixed"
     st.rerun()
@@ -200,13 +243,8 @@ with tab2:
                         })
                 df_input = pd.DataFrame(pts)
             else:
-                df_input = pd.read_csv(up_file, encoding='shift-jis')
-                df_input = df_input.rename(columns={
-                    df_input.columns[0]: '点名',
-                    df_input.columns[1]: 'X',
-                    df_input.columns[2]: 'Y',
-                    df_input.columns[3]: 'H'
-                })
+                # ★修正: ヘッダー有無を自動判定して読み込む
+                df_input = read_csv_auto(up_file)
             run_calculation_process(df_input)
         except Exception as e:
             st.error(f"エラー: {e}")
@@ -215,12 +253,14 @@ with tab3:
     st.markdown("""
     ### 📖 操作ガイド
     1. **座標変換**: 『1点入力』または『ファイル一括』で計算を実行します。
-    2. **マップ表示**: 変換が完了すると、自動的に計算地点にピンが立ちます。
-    3. **ポリゴン描画**: マップ左側の **『五角形のアイコン』** をクリックし、地図上をクリックして図形を描きます。
-    4. **ダブルクリックで確定**: 図形を描き終えたら、最後の点でダブルクリックすると確定します。
-    5. **図形の編集**: マップ左側の **『鉛筆アイコン』** をクリックすると、描画済みの図形を編集できます。編集後は『Save』を押して確定してください。
-    6. **図形の削除**: マップ左側の **『ゴミ箱アイコン』** をクリックすると、描画済みの図形を削除できます。
-    7. **エクスポート**: サイドバーの **『KML出力対象を選択』** で『両方』などを選び、『KMLを保存』を押すと、ピンと図形がセットでダウンロードされます。
+    2. **CSV読み込み**: ヘッダー行（フィールド名）があってもなくても自動判定して1点目から変換します。
+    3. **マップ表示**: 変換が完了すると、自動的に計算地点にピンが立ちます。
+    4. **ポリゴン描画**: マップ左側の **『五角形のアイコン』** をクリックし、地図上をクリックして図形を描きます。
+    5. **ダブルクリックで確定**: 図形を描き終えたら、最後の点でダブルクリックすると確定します。
+    6. **図形の編集**: マップ左側の **『鉛筆アイコン』** をクリックすると編集できます。編集後は『Save』で確定してください。
+    7. **図形の削除**: マップ左側の **『ゴミ箱アイコン』** をクリックすると削除できます。
+    8. **マップクリックで点追加**: マップ上の任意の場所をクリックすると緯度経度が取得されます。点名と標高Hを入力して『クリック地点を追加』ボタンで変換リストに追加できます。
+    9. **エクスポート**: サイドバーの『KML出力対象を選択』で『両方』などを選び、『KMLを保存』を押すとダウンロードできます。
     """)
 
 # --- 5. 結果表示 & マップ描画 ---
@@ -228,7 +268,7 @@ if 'result' in st.session_state:
     res = st.session_state.result
     st.divider()
 
-    # ★修正: テーブル表示にも緯度経度の形式変換を適用
+    # テーブル表示（緯度経度の形式変換を適用）
     res_disp = res.copy()
     if latlon_format == "60進法 (DMS)":
         res_disp['緯度'] = res_disp['緯度'].map(decimal_to_dms)
@@ -257,7 +297,7 @@ if 'result' in st.session_state:
 
         m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles_url, attr=attr)
 
-        # 既存のポイントを描画
+        # 既存ポイントを描画
         fg = folium.FeatureGroup(name="Markers")
         for _, row in valid_map_data.iterrows():
             folium.Marker(
@@ -275,7 +315,7 @@ if 'result' in st.session_state:
             ).add_to(fg)
         fg.add_to(m)
 
-        # Draw プラグイン（edit_options を正しい形式で指定）
+        # Drawプラグイン
         draw = Draw(
             export=False,
             draw_options={
@@ -293,15 +333,60 @@ if 'result' in st.session_state:
         )
         draw.add_to(m)
 
-        # key を固定して描画データがリセットされないようにする
         map_key = st.session_state.get('map_key', 'folium_map_fixed')
         output = st_folium(m, width=1200, height=600, key=map_key)
 
-        # 描画されたデータをセッションに保存（KML出力用）
+        # 描画データ保存
         if output.get('all_drawings'):
             st.session_state.drawn_data = output
 
-        # 描画済み図形の件数を表示
         drawn_count = len(output.get('all_drawings') or [])
         if drawn_count > 0:
             st.info(f"✏️ 描画済み図形: {drawn_count} 件（KML保存ボタンで出力できます）")
+
+        # ★追加: マップクリックで点を追加する機能
+        clicked = output.get('last_clicked')
+        if clicked:
+            click_lat = clicked.get('lat')
+            click_lng = clicked.get('lng')
+            st.divider()
+            st.subheader("📍 クリック地点を変換リストに追加")
+            st.write(f"クリック位置: 緯度 **{click_lat:.8f}** / 経度 **{click_lng:.8f}**")
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                new_point_name = st.text_input(
+                    "点名を入力",
+                    value=f"Click_{len(res) + 1}",
+                    key="click_point_name"
+                )
+            with col2:
+                new_point_h = st.number_input(
+                    "標高 H を入力",
+                    value=0.0,
+                    format="%.4f",
+                    key="click_point_h"
+                )
+            with col3:
+                st.write("")
+                st.write("")
+                if st.button("➕ クリック地点を追加", type="primary"):
+                    # 逆変換で平面直角座標を計算
+                    y_val, x_val = transformer_inv.transform(click_lng, click_lat)
+                    gh = get_geoid_height(click_lat, click_lng, use_geoid)
+                    new_row = pd.DataFrame([{
+                        "点名": new_point_name,
+                        "X": round(x_val, 4),
+                        "Y": round(y_val, 4),
+                        "標高H": new_point_h,
+                        "緯度": click_lat,
+                        "経度": click_lng,
+                        "ジオイド高": gh,
+                        "楕円体高": round(new_point_h + gh + offset_val, 4),
+                        "適用モデル": use_geoid
+                    }])
+                    st.session_state.result = pd.concat(
+                        [st.session_state.result, new_row], ignore_index=True
+                    )
+                    st.success(f"✅ 『{new_point_name}』を追加しました。")
+                    st.rerun()
