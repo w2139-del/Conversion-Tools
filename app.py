@@ -11,7 +11,7 @@ import time
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="高精度座標変換ツール", layout="wide")
-st.title("緯度経度変換ツール")
+st.title("座標変換ツール")
 
 # --- 2. ユーティリティ関数 ---
 def decimal_to_dms(deg):
@@ -113,6 +113,7 @@ if 'result' in st.session_state:
     )
 
     kml = simplekml.Kml()
+
     if "ポイント" in kml_export_type:
         pnt_folder = kml.newfolder(name="Points")
         for _, r in res_data.iterrows():
@@ -120,22 +121,37 @@ if 'result' in st.session_state:
                 name=str(r['点名']),
                 coords=[(r['経度'], r['緯度'], r['楕円体高'])]
             )
+
     if "ポリゴン" in kml_export_type and 'drawn_data' in st.session_state:
         poly_folder = kml.newfolder(name="Polygons")
         features = st.session_state.drawn_data.get('all_drawings', [])
         for i, feat in enumerate(features):
             geom = feat.get('geometry', {})
+
             if geom.get('type') == 'Polygon':
                 coords = geom.get('coordinates', [[]])[0]
-                poly = poly_folder.newpolygon(name=f"Polygon_{i+1}")
-                poly.outerboundaryis = coords
-                poly.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.cyan)
+                # ★修正: 始点と終点を確実に閉じる＋高度0を付与
+                if len(coords) >= 3:
+                    if coords[0] != coords[-1]:
+                        coords = coords + [coords[0]]
+                    closed_coords = [(c[0], c[1], 0) for c in coords]
+                    poly = poly_folder.newpolygon(name=f"Polygon_{i+1}")
+                    poly.outerboundaryis.coords = closed_coords
+                    poly.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.cyan)
+                    poly.style.polystyle.fill = 1
+                    poly.style.polystyle.outline = 1
+                    poly.style.linestyle.color = simplekml.Color.blue
+                    poly.style.linestyle.width = 2
+
             elif geom.get('type') == 'LineString':
                 coords = geom.get('coordinates', [])
-                line = poly_folder.newlinestring(name=f"Line_{i+1}")
-                line.coords = coords
-                line.style.linestyle.color = simplekml.Color.red
-                line.style.linestyle.width = 3
+                if len(coords) >= 2:
+                    # ★修正: 高度0を付与
+                    line_coords = [(c[0], c[1], 0) for c in coords]
+                    line = poly_folder.newlinestring(name=f"Line_{i+1}")
+                    line.coords = line_coords
+                    line.style.linestyle.color = simplekml.Color.red
+                    line.style.linestyle.width = 3
 
     st.sidebar.download_button(
         label="🌍 KMLを保存",
@@ -226,7 +242,7 @@ with tab3:
        - 位置が確定したらマップ下の **『マーカーを変換リストに追加』** ボタンを押します。
        - 点名は自動連番（Click_1, Click_2...）、標高Hは0.0固定で追加されます。
     6. **図形・マーカーの削除**: ゴミ箱アイコンで削除できます。
-    7. **エクスポート**: サイドバーから CSV・KML を保存できます。
+    7. **エクスポート**: サイドバーから CSV・KML を保存できます。KMLはGoogle マップで読み込めます。
     """)
 
 # --- 5. 結果表示 & マップ描画 ---
@@ -264,7 +280,6 @@ if 'result' in st.session_state:
 
         m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles_url, attr=attr)
 
-        # 変換済みポイントをマップに描画
         fg = folium.FeatureGroup(name="Markers")
         for _, row in valid_map_data.iterrows():
             folium.Marker(
@@ -282,7 +297,6 @@ if 'result' in st.session_state:
             ).add_to(fg)
         fg.add_to(m)
 
-        # マーカーツールを含むDrawプラグイン
         draw = Draw(
             export=False,
             draw_options={
@@ -303,13 +317,11 @@ if 'result' in st.session_state:
         map_key = st.session_state.get('map_key', 'folium_map_fixed')
         output = st_folium(m, width=1200, height=600, key=map_key)
 
-        # 描画データ保存
         if output.get('all_drawings') is not None:
             st.session_state.drawn_data = output
 
         all_drawings = output.get('all_drawings') or []
 
-        # ポリゴン・ライン件数の表示
         non_point_count = sum(
             1 for f in all_drawings
             if f.get('geometry', {}).get('type') != 'Point'
@@ -317,17 +329,11 @@ if 'result' in st.session_state:
         if non_point_count > 0:
             st.info(f"✏️ 描画済み図形: {non_point_count} 件（KML保存ボタンで出力できます）")
 
-        # マーカー（Point）のみ抽出
         placed_markers = [
             f for f in all_drawings
             if f.get('geometry', {}).get('type') == 'Point'
         ]
 
-        # ================================================
-        # ★ マーカー追加ボタン（点名自動連番・H=0.0固定）
-        #    ※ Edit でドラッグ移動 → Save 後に押すことで
-        #       修正後の座標をリストに追加できる
-        # ================================================
         if placed_markers:
             st.divider()
 
@@ -340,14 +346,13 @@ if 'result' in st.session_state:
                 coords = feat['geometry']['coordinates']
                 coord_key = (round(coords[1], 8), round(coords[0], 8))
                 if coord_key not in registered:
-                    new_markers.append((coords[1], coords[0]))  # (lat, lon)
+                    new_markers.append((coords[1], coords[0]))
 
             if new_markers:
                 st.info(f"📍 未登録のマーカーが {len(new_markers)} 件あります。位置を確認してから追加してください。")
                 st.caption("💡 位置を修正する場合は鉛筆アイコン（Edit）でドラッグ → Save してから追加ボタンを押してください。")
 
                 if st.button("➕ マーカーを変換リストに追加", type="primary"):
-                    # 現在のClick連番の最大値を取得
                     existing_click_nums = []
                     for name in st.session_state.result['点名'].astype(str):
                         if name.startswith('Click_'):
