@@ -11,7 +11,7 @@ import time
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(page_title="高精度座標変換ツール", layout="wide")
-st.title("座標変換ツール")
+st.title("緯度経度変換ツール")
 
 # --- 2. ユーティリティ関数 ---
 def decimal_to_dms(deg):
@@ -84,7 +84,7 @@ st.sidebar.header("💾 成果品保存")
 
 kml_export_type = st.sidebar.selectbox(
     "KML出力対象を選択",
-    ["ポイントとポリゴンの両方", "ポイントのみ", "ポリゴンのみ"],
+    ["ポイントと図形の両方", "ポイントのみ", "図形のみ"],
     index=0
 )
 
