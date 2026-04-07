@@ -169,15 +169,14 @@ map_type = st.sidebar.radio("背景地図", ["航空写真", "標準地図"], in
 
 st.sidebar.markdown("---")
 st.sidebar.header("💾 成果品保存")
-latlon_format = "10進法 (DD)"
 
+# --- CSV保存セクション ---
 if "result" in st.session_state:
     res_data = st.session_state.result
-    latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
+    latlon_fmt = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
     disp_csv = res_data.copy()
-    if latlon_format == "60進法 (DMS)":
-        disp_csv["緯度"] = disp_csv["緯度"].map(decimal_to_dms)
-        disp_csv["経度"] = disp_csv["経度"].map(decimal_to_dms)
+    if latlon_fmt == "60進法 (DMS)":
+        disp_csv["緯度"] = disp_csv["緯度"].map(decimal_to_dms); disp_csv["経度"] = disp_csv["経度"].map(decimal_to_dms)
     else:
         for c in ["緯度", "経度"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.8f}")
     for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
@@ -189,9 +188,33 @@ if "result" in st.session_state:
         mime="text/csv",
         use_container_width=True
     )
-    st.sidebar.info("🌍 KMLはマップ下の『KMLを保存』ボタンから保存してください。")
 else:
-    st.sidebar.info("計算を実行すると保存ボタンが表示されます。")
+    st.sidebar.info("計算を実行するとCSV保存が可能です。")
+
+st.sidebar.markdown("---")
+
+# --- KML保存セクション ---
+st.sidebar.subheader("🌍 KML保存設定")
+kml_type = st.sidebar.selectbox("KML出力対象", ["ポイントと図形の両方", "ポイントのみ", "図形のみ"], index=0)
+
+# KML用データの準備
+current_drawn = st.session_state.get("drawn_data", {})
+res_for_kml = st.session_state.get("result")
+kml_bytes = build_kml(res_for_kml, kml_type, current_drawn)
+
+# 図形の件数表示
+all_draws = current_drawn.get("all_drawings") or []
+non_p_count = sum(1 for f in all_draws if f.get("geometry", {}).get("type") != "Point")
+if non_p_count > 0:
+    st.sidebar.caption(f"✏️ 描画済み図形: {non_p_count} 件")
+
+st.sidebar.download_button(
+    label="🌍 KMLを保存",
+    data=kml_bytes,
+    file_name=f"spatial_data_{int(time.time())}.kml",
+    mime="application/vnd.google-earth.kml+xml",
+    use_container_width=True
+)
 
 # --- 4. メインコンテンツ ---
 transformer = Transformer.from_crs(f"EPSG:{6668 + zone}", "EPSG:4326", always_xy=True)
@@ -236,29 +259,12 @@ with tab2:
             run_calculation_process(df_input)
         except Exception as e: st.error(f"エラー: {e}")
 
-with tab3:
-    st.markdown("""
-    ### 📖 操作ガイド
-    1. **座標変換**: 計算を実行するとマップ上にピンが立ち、表が表示されます。
-    2. **マップ表示**: 起動時は福島市内のデフォルト位置を表示しています。
-    3. **図形描画**: 計算前でもマップ左側のアイコンで図形（ポリゴン等）を描画できます。
-    4. **マーカー追加**: マップ上の「ピン」アイコンで任意地点を追加し「リストに追加」で座標を取得できます。
-    5. **成果品保存**: 表の下にある「KMLを保存」から、描いた図形やポイントを書き出せます。
-    """)
-
 # --- 5. 結果表示 & マップ描画（常時表示セクション） ---
 st.divider()
 
-# 計算結果がある場合は表を表示
 if "result" in st.session_state:
     res = st.session_state.result
-    res_disp = res.copy()
-    if latlon_format == "60進法 (DMS)":
-        res_disp["緯度"] = res_disp["緯度"].map(decimal_to_dms); res_disp["経度"] = res_disp["経度"].map(decimal_to_dms)
-    else:
-        res_disp["緯度"] = res_disp["緯度"].map(lambda x: f"{x:.8f}"); res_disp["経度"] = res_disp["経度"].map(lambda x: f"{x:.8f}")
-    for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: res_disp[c] = res_disp[c].map(lambda x: f"{x:.4f}")
-    st.dataframe(res_disp, use_container_width=True)
+    st.dataframe(res, use_container_width=True)
 
 st.subheader("🗺 マッププレビュー & 描画ツール")
 
@@ -295,31 +301,13 @@ Draw(export=False, draw_options={"marker":True, "polyline":True, "rectangle":Tru
 # マップ表示
 output = st_folium(m, width=1200, height=600, key="main_folium_map")
 
-# 描画データ管理
+# 描画データ管理（サイドバーのKMLボタンに反映される）
 if output.get("all_drawings") is not None:
-    st.session_state.drawn_data = output
+    if st.session_state.get("drawn_data") != output:
+        st.session_state.drawn_data = output
+        st.rerun()
 
-# --- 6. 保存・追加UI（常時表示） ---
-st.divider()
-st.subheader("💾 成果品保存（KML）")
-col_kml1, col_kml2 = st.columns(2)
-
-with col_kml1:
-    kml_type = st.selectbox("KML出力対象を選択", ["ポイントと図形の両方", "ポイントのみ", "図形のみ"], index=0, key="kml_type_select")
-
-with col_kml2:
-    current_drawn = st.session_state.get("drawn_data", {})
-    res_for_kml = st.session_state.get("result")
-    kml_bytes = build_kml(res_for_kml, kml_type, current_drawn)
-    
-    all_draws = current_drawn.get("all_drawings") or []
-    non_p_count = sum(1 for f in all_draws if f.get("geometry", {}).get("type") != "Point")
-    if non_p_count > 0: st.info(f"✏️ 描画済み図形: {non_p_count} 件")
-
-    st.download_button(label="🌍 KMLを保存", data=kml_bytes, file_name=f"spatial_data_{int(time.time())}.kml",
-                       mime="application/vnd.google-earth.kml+xml", use_container_width=True)
-
-# マーカー追加UI
+# マーカー追加UI（マップ直下）
 placed_markers = [f for f in (current_drawn.get("all_drawings") or []) if f.get("geometry", {}).get("type") == "Point"]
 if placed_markers:
     st.divider()
@@ -332,9 +320,8 @@ if placed_markers:
         if k not in registered: new_m.append((coords[1], coords[0]))
 
     if new_m:
-        st.info(f"📍 未登録のマーカーが {len(new_m)} 件あります。位置を確認してから追加してください。")
+        st.info(f"📍 未登録のマーカーが {len(new_m)} 件あります。")
         if st.button("➕ マーカーを変換リストに追加", type="primary"):
-            # resultがまだない場合は空のDFを作成
             if "result" not in st.session_state:
                 st.session_state.result = pd.DataFrame(columns=["点名", "X", "Y", "標高H", "緯度", "経度", "ジオイド高", "楕円体高", "適用モデル"])
             
@@ -358,5 +345,4 @@ if placed_markers:
 
             st.session_state.result = pd.concat([st.session_state.result, pd.DataFrame(new_rows)], ignore_index=True)
             st.session_state.registered_marker_coords.extend(new_reg)
-            st.success(f"✅ {len(new_rows)} 件を追加しました。")
             st.rerun()
