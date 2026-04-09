@@ -59,7 +59,7 @@ def get_geoid_height(lat, lon, model_name):
         v = [g[r0, c0], g[r0, c1], g[r1, c0], g[r1, c1]]
         if any(x > 900 for x in v):
             return 0.0
-        dr, dc = r - r0, c - c0
+        dr, dc = r - r0, c - dc
         return round((1-dr)*(1-dc)*v[0] + (1-dr)*dc*v[1] + dr*(1-dc)*v[2] + dr*dc*v[3], 4)
     except:
         return 0.0
@@ -87,7 +87,6 @@ def read_csv_auto(uploaded_file):
 
 def build_kml(res_data, kml_export_type, drawn_data):
     placemarks = []
-    # ポイント出力
     if "ポイント" in kml_export_type and res_data is not None:
         for _, r in res_data.iterrows():
             pname = str(r["点名"]).replace("&", "&").replace("<", "<").replace(">", ">")
@@ -104,7 +103,6 @@ def build_kml(res_data, kml_export_type, drawn_data):
             )
             placemarks.append(placemark)
 
-    # 図形出力
     if ("図形" in kml_export_type or "ポリゴン" in kml_export_type) and drawn_data:
         features = drawn_data.get("all_drawings", [])
         poly_count = 1
@@ -147,7 +145,6 @@ def build_kml(res_data, kml_export_type, drawn_data):
                 )
                 placemarks.append(placemark)
                 line_count += 1
-
     body = "\n".join(placemarks)
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -170,16 +167,23 @@ map_type = st.sidebar.radio("背景地図", ["航空写真", "標準地図"], in
 st.sidebar.markdown("---")
 st.sidebar.header("💾 成果品保存")
 
+# 緯度経度の形式選択（計算結果の有無に関わらず表示）
+latlon_fmt = st.sidebar.radio("緯度経度の表示形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
+
 # --- CSV保存セクション ---
 if "result" in st.session_state:
     res_data = st.session_state.result
-    latlon_fmt = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
     disp_csv = res_data.copy()
+    
+    # 選択された形式に合わせてCSVの中身を成形
     if latlon_fmt == "60進法 (DMS)":
-        disp_csv["緯度"] = disp_csv["緯度"].map(decimal_to_dms); disp_csv["経度"] = disp_csv["経度"].map(decimal_to_dms)
+        disp_csv["緯度"] = disp_csv["緯度"].map(decimal_to_dms)
+        disp_csv["経度"] = disp_csv["経度"].map(decimal_to_dms)
     else:
         for c in ["緯度", "経度"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.8f}")
-    for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
+    
+    for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: 
+        disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
 
     st.sidebar.download_button(
         label="📊 CSVを保存",
@@ -197,12 +201,10 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 KML保存設定")
 kml_type = st.sidebar.selectbox("KML出力対象", ["ポイントと図形の両方", "ポイントのみ", "図形のみ"], index=0)
 
-# KML用データの準備
 current_drawn = st.session_state.get("drawn_data", {})
 res_for_kml = st.session_state.get("result")
 kml_bytes = build_kml(res_for_kml, kml_type, current_drawn)
 
-# 図形の件数表示
 all_draws = current_drawn.get("all_drawings") or []
 non_p_count = sum(1 for f in all_draws if f.get("geometry", {}).get("type") != "Point")
 if non_p_count > 0:
@@ -231,118 +233,4 @@ def run_calculation_process(input_df):
         "緯度": lats, "経度": lons, "ジオイド高": ghs,
         "楕円体高": input_df["H"].values + np.array(ghs) + offset_val, "適用モデル": use_geoid
     })
-    if "map_key" not in st.session_state: st.session_state.map_key = "folium_map_fixed"
-    if "registered_marker_coords" not in st.session_state: st.session_state.registered_marker_coords = []
-    st.rerun()
-
-with tab1:
-    col_a, col_b, col_c, col_d = st.columns(4)
-    with col_a: p_name = st.text_input("点名", "Point_1")
-    with col_b: p_x = st.number_input("X座標", value=0.0, format="%.4f")
-    with col_c: p_y = st.number_input("Y座標", value=0.0, format="%.4f")
-    with col_d: p_h = st.number_input("標高 H", value=0.0, format="%.4f")
-    if st.button("計算実行 (1点)", type="primary"): run_calculation_process(pd.DataFrame([{"点名": p_name, "X": p_x, "Y": p_y, "H": p_h}]))
-
-with tab2:
-    up_file = st.file_uploader("CSV/SIMAアップロード", type=["csv", "sim"])
-    if up_file and st.button("一括計算開始 🚀", type="primary"):
-        try:
-            if up_file.name.lower().endswith(".sim"):
-                pts = []
-                content_sim = up_file.read().decode("shift-jis", errors="replace")
-                for line in content_sim.splitlines():
-                    p = line.split(",")
-                    if len(p) >= 6 and p[0] in ["A01", "C00", "C01"]:
-                        pts.append({"点名": p[1] if p[0].startswith("C") else p[2], "X": float(p[3]), "Y": float(p[4]), "H": float(p[5])})
-                df_input = pd.DataFrame(pts)
-            else: df_input = read_csv_auto(up_file)
-            run_calculation_process(df_input)
-        except Exception as e: st.error(f"エラー: {e}")
-
-# --- 5. 結果表示 & マップ描画（常時表示セクション） ---
-st.divider()
-
-if "result" in st.session_state:
-    res = st.session_state.result
-    st.dataframe(res, use_container_width=True)
-
-st.subheader("🗺 マッププレビュー & 描画ツール")
-
-# 中心座標の決定
-if "result" in st.session_state and not st.session_state.result.empty:
-    avg_lat = st.session_state.result["緯度"].mean()
-    avg_lon = st.session_state.result["経度"].mean()
-    zoom_start = 18
-else:
-    avg_lat, avg_lon = DEFAULT_LAT, DEFAULT_LON
-    zoom_start = 17
-
-# タイル設定
-if map_type == "航空写真":
-    tiles_url, attr = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", "GSI"
-else:
-    tiles_url, attr = "OpenStreetMap", "OpenStreetMap"
-
-m = folium.Map(location=[avg_lat, avg_lon], zoom_start=zoom_start, tiles=tiles_url, attr=attr)
-
-# 登録済みマーカー（計算結果）の描画
-if "result" in st.session_state:
-    fg = folium.FeatureGroup(name="Markers")
-    for _, row in st.session_state.result.iterrows():
-        folium.Marker([row["緯度"], row["経度"]], popup=str(row["点名"]), tooltip=str(row["点名"])).add_to(fg)
-        folium.Marker([row["緯度"], row["経度"]], icon=folium.DivIcon(icon_size=(150, 30), icon_anchor=(7, 25),
-            html='<div style="font-size:11pt;color:red;font-weight:bold;text-shadow:2px 2px 2px #fff;">' + str(row["点名"]) + '</div>')).add_to(fg)
-    fg.add_to(m)
-
-# 描画コントロール
-Draw(export=False, draw_options={"marker":True, "polyline":True, "rectangle":True, "polygon":True, "circle":False, "circlemarker":False},
-     edit_options={"edit": {}, "remove": {}}).add_to(m)
-
-# マップ表示
-output = st_folium(m, width=1200, height=600, key="main_folium_map")
-
-# 描画データ管理（サイドバーのKMLボタンに反映される）
-if output.get("all_drawings") is not None:
-    if st.session_state.get("drawn_data") != output:
-        st.session_state.drawn_data = output
-        st.rerun()
-
-# マーカー追加UI（マップ直下）
-placed_markers = [f for f in (current_drawn.get("all_drawings") or []) if f.get("geometry", {}).get("type") == "Point"]
-if placed_markers:
-    st.divider()
-    if "registered_marker_coords" not in st.session_state: st.session_state.registered_marker_coords = []
-    registered = st.session_state.registered_marker_coords
-    new_m = []
-    for feat in placed_markers:
-        coords = feat["geometry"]["coordinates"]
-        k = (round(coords[1], 8), round(coords[0], 8))
-        if k not in registered: new_m.append((coords[1], coords[0]))
-
-    if new_m:
-        st.info(f"📍 未登録のマーカーが {len(new_m)} 件あります。")
-        if st.button("➕ マーカーを変換リストに追加", type="primary"):
-            if "result" not in st.session_state:
-                st.session_state.result = pd.DataFrame(columns=["点名", "X", "Y", "標高H", "緯度", "経度", "ジオイド高", "楕円体高", "適用モデル"])
-            
-            existing_click_nums = []
-            for name in st.session_state.result["点名"].astype(str):
-                if name.startswith("Click_"):
-                    try: existing_click_nums.append(int(name.split("_")[1]))
-                    except: pass
-            next_num = max(existing_click_nums, default=0) + 1
-
-            new_rows = []
-            new_reg = []
-            for m_lat, m_lon in new_m:
-                y_v, x_v = transformer_inv.transform(m_lon, m_lat)
-                gh = get_geoid_height(m_lat, m_lon, use_geoid)
-                new_rows.append({"点名": f"Click_{next_num}", "X": round(x_v, 4), "Y": round(y_v, 4), "標高H": 0.0,
-                                 "緯度": m_lat, "経度": m_lon, "ジオイド高": gh,
-                                 "楕円体高": round(0.0 + gh + offset_val, 4), "適用モデル": use_geoid})
-                new_reg.append((round(m_lat, 8), round(m_lon, 8)))
-                next_num += 1
-
-            st.session_state.result = pd.concat([st.session_state.result, pd.DataFrame(new_rows)], ignore_index=True)
-            st.session_state.registered_marker_coords.extend(new_reg)
-            st.rerun()
+    if "map_key" not in st.session_state: st.session
