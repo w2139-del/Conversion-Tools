@@ -79,30 +79,41 @@ def read_csv_auto(uploaded_file):
     return df
 
 def build_kml(res_data, kml_export_type, drawn_data):
-    """Google Earth対応KML生成 ※nameタグを正しく使用"""
-    TAG_OPEN  = "<name>"
-    TAG_CLOSE = "</name>"
+    """Google Earth対応KML生成"""
+    NM_O = "<" + "name" + ">"
+    NM_C = "</" + "name" + ">"
 
     lines = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append('<kml xmlns="http://www.opengis.net/kml/2.2">')
     lines.append("  <Document>")
-    lines.append("  " + TAG_OPEN + "spatial_data" + TAG_CLOSE)
+    lines.append("  " + NM_O + "spatial_data" + NM_C)
+    # スタイルをDocument直下に定義（IDで参照するGoogle Earth推奨方式）
+    lines += [
+        "  <Style id=\"poly_style\">",
+        "    <LineStyle><color>ffff0000</color><width>2</width></LineStyle>",
+        "    <PolyStyle><color>6400ffff</color><fill>1</fill><outline>1</outline></PolyStyle>",
+        "  </Style>",
+        "  <Style id=\"line_style\">",
+        "    <LineStyle><color>ff0000ff</color><width>3</width></LineStyle>",
+        "  </Style>",
+        "  <Style id=\"point_style\">",
+        "    <IconStyle><Icon><href>http://maps.google.com/mapfiles/kml/paddle/red-circle.png</href></Icon></IconStyle>",
+        "  </Style>",
+    ]
 
     # ポイント出力
     if "ポイント" in kml_export_type and res_data is not None:
         for _, r in res_data.iterrows():
             pname = str(r["点名"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             lines += [
-                "    <Placemark>",
-                "      " + TAG_OPEN + pname + TAG_CLOSE,
-                "      <Style><IconStyle><Icon>",
-                "        <href>http://maps.google.com/mapfiles/kml/paddle/red-circle.png</href>",
-                "      </Icon></IconStyle></Style>",
-                "      <Point>",
-                "        <coordinates>" + str(r["経度"]) + "," + str(r["緯度"]) + "," + str(r["楕円体高"]) + "</coordinates>",
-                "      </Point>",
-                "    </Placemark>",
+                "  <Placemark>",
+                "    " + NM_O + pname + NM_C,
+                "    <styleUrl>#point_style</styleUrl>",
+                "    <Point>",
+                "      <coordinates>" + str(r["経度"]) + "," + str(r["緯度"]) + "," + str(r["楕円体高"]) + "</coordinates>",
+                "    </Point>",
+                "  </Placemark>",
             ]
 
     # ポリゴン・ライン出力
@@ -119,20 +130,25 @@ def build_kml(res_data, kml_export_type, drawn_data):
                     continue
                 if coords[0] != coords[-1]:
                     coords = coords + [coords[0]]
-                coord_str = " ".join(str(c[0]) + "," + str(c[1]) + ",0" for c in coords)
+                coord_str = "\n".join(
+                    "          " + str(c[0]) + "," + str(c[1]) + ",0"
+                    for c in coords
+                )
                 lines += [
-                    "    <Placemark>",
-                    "      " + TAG_OPEN + "Polygon_" + str(poly_count) + TAG_CLOSE,
-                    "      <Style>",
-                    "        <LineStyle><color>ffff0000</color><width>2</width></LineStyle>",
-                    "        <PolyStyle><color>6400ffff</color><fill>1</fill><outline>1</outline></PolyStyle>",
-                    "      </Style>",
-                    "      <Polygon>",
-                    "        <outerBoundaryIs><LinearRing>",
-                    "          <coordinates>" + coord_str + "</coordinates>",
-                    "        </LinearRing></outerBoundaryIs>",
-                    "      </Polygon>",
-                    "    </Placemark>",
+                    "  <Placemark>",
+                    "    " + NM_O + "Polygon_" + str(poly_count) + NM_C,
+                    "    <styleUrl>#poly_style</styleUrl>",
+                    "    <Polygon>",
+                    "      <tessellate>1</tessellate>",
+                    "      <outerBoundaryIs>",
+                    "        <LinearRing>",
+                    "          <coordinates>",
+                    coord_str,
+                    "          </coordinates>",
+                    "        </LinearRing>",
+                    "      </outerBoundaryIs>",
+                    "    </Polygon>",
+                    "  </Placemark>",
                 ]
                 poly_count += 1
 
@@ -140,15 +156,21 @@ def build_kml(res_data, kml_export_type, drawn_data):
                 coords = geom.get("coordinates", [])
                 if len(coords) < 2:
                     continue
-                coord_str = " ".join(str(c[0]) + "," + str(c[1]) + ",0" for c in coords)
+                coord_str = "\n".join(
+                    "        " + str(c[0]) + "," + str(c[1]) + ",0"
+                    for c in coords
+                )
                 lines += [
-                    "    <Placemark>",
-                    "      " + TAG_OPEN + "Line_" + str(line_count) + TAG_CLOSE,
-                    "      <Style><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>",
-                    "      <LineString>",
-                    "        <coordinates>" + coord_str + "</coordinates>",
-                    "      </LineString>",
-                    "    </Placemark>",
+                    "  <Placemark>",
+                    "    " + NM_O + "Line_" + str(line_count) + NM_C,
+                    "    <styleUrl>#line_style</styleUrl>",
+                    "    <LineString>",
+                    "      <tessellate>1</tessellate>",
+                    "      <coordinates>",
+                    coord_str,
+                    "      </coordinates>",
+                    "    </LineString>",
+                    "  </Placemark>",
                 ]
                 line_count += 1
 
