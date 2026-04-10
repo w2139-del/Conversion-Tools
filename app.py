@@ -199,7 +199,93 @@ if "result" in st.session_state:
         mime="text/csv",
         use_container_width=True
     )
-    st.sidebar.info("🌍 KMLはマップ下の『KMLを保存』ボタンから保存してください。")
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🌍 KML保存")
+    kml_export_type = st.sidebar.selectbox(
+        "KML出力対象を選択",
+        ["ポイントと図形の両方", "ポイントのみ", "図形のみ"],
+        index=0,
+        key="kml_type_select"
+    )
+    current_drawn_sidebar = st.session_state.get("drawn_data", {})
+    kml_bytes_sidebar = build_kml(res_data, kml_export_type, current_drawn_sidebar)
+    non_point_count_sidebar = sum(
+        1 for f in current_drawn_sidebar.get("all_drawings", [])
+        if f.get("geometry", {}).get("type") != "Point"
+    )
+    if non_point_count_sidebar > 0:
+        st.sidebar.info(f"✏️ 描画済み図形: {non_point_count_sidebar} 件")
+    st.sidebar.download_button(
+        label="🌍 KMLを保存",
+        data=kml_bytes_sidebar,
+        file_name=f"spatial_data_{int(time.time())}.kml",
+        mime="application/vnd.google-earth.kml+xml",
+        use_container_width=True
+    )
+
+    # マーカー追加UIをサイドバーに表示
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📍 マーカー追加")
+    _all_drawings_sb = st.session_state.get("drawn_data", {}).get("all_drawings") or []
+    _placed_markers_sb = [
+        f for f in _all_drawings_sb
+        if f.get("geometry", {}).get("type") == "Point"
+    ]
+    if _placed_markers_sb:
+        if "registered_marker_coords" not in st.session_state:
+            st.session_state.registered_marker_coords = []
+        _registered_sb = st.session_state.registered_marker_coords
+        _new_markers_sb = []
+        for feat in _placed_markers_sb:
+            coords = feat["geometry"]["coordinates"]
+            coord_key = (round(coords[1], 8), round(coords[0], 8))
+            if coord_key not in _registered_sb:
+                _new_markers_sb.append((coords[1], coords[0]))
+        if _new_markers_sb:
+            st.sidebar.info(f"📍 未登録マーカー: {len(_new_markers_sb)} 件")
+            st.sidebar.caption("💡 位置修正は鉛筆アイコン（Edit）でドラッグ → Save 後に追加してください。")
+            if st.sidebar.button("➕ マーカーを変換リストに追加", type="primary", key="add_marker_sidebar"):
+                _transformer_inv_sb = Transformer.from_crs("EPSG:4326", f"EPSG:{6668 + zone}", always_xy=True)
+                _existing_click_nums = []
+                for name in st.session_state.result["点名"].astype(str):
+                    if name.startswith("Click_"):
+                        try:
+                            _existing_click_nums.append(int(name.split("_")[1]))
+                        except ValueError:
+                            pass
+                _next_num = max(_existing_click_nums, default=0) + 1
+                _new_rows = []
+                _newly_registered = []
+                for m_lat, m_lon in _new_markers_sb:
+                    y_val, x_val = _transformer_inv_sb.transform(m_lon, m_lat)
+                    gh = get_geoid_height(m_lat, m_lon, use_geoid)
+                    point_name = f"Click_{_next_num}"
+                    _next_num += 1
+                    _new_rows.append({
+                        "点名": point_name,
+                        "X": round(x_val, 4),
+                        "Y": round(y_val, 4),
+                        "標高H": 0.0,
+                        "緯度": m_lat,
+                        "経度": m_lon,
+                        "ジオイド高": gh,
+                        "楕円体高": round(0.0 + gh + offset_val, 4),
+                        "適用モデル": use_geoid
+                    })
+                    _newly_registered.append((round(m_lat, 8), round(m_lon, 8)))
+                st.session_state.result = pd.concat(
+                    [st.session_state.result, pd.DataFrame(_new_rows)],
+                    ignore_index=True
+                )
+                st.session_state.registered_marker_coords.extend(_newly_registered)
+                st.success(f"✅ {len(_new_rows)} 件を変換リストに追加しました。")
+                st.rerun()
+        else:
+            st.sidebar.success("✅ 全マーカー登録済み")
+    else:
+        st.sidebar.info("マップにマーカーを配置すると追加ボタンが表示されます。")
+
 else:
     st.sidebar.info("計算を実行すると保存ボタンが表示されます。")
 
@@ -275,11 +361,14 @@ with tab3:
     5. **マーカーで点追加**:
        - マップ左側の「ピンアイコン（Marker）」をクリックし地図上に配置します。
        - 位置を間違えた場合は「鉛筆アイコン（Edit）」でドラッグして移動 → 「Save」で確定してください。
-       - 位置が確定したらマップ下の「マーカーを変換リストに追加」ボタンを押します。
-    6. **KML保存**: ポリゴン描画後、**マップ下の「KMLを保存」ボタン**から保存してください。
+       - 位置が確定したら**サイドバーの「マーカーを変換リストに追加」ボタン**を押します。
+    6. **KML保存**: ポリゴン描画後、**サイドバーの「KMLを保存」ボタン**から保存してください。
     """)
 
 # --- 5. 結果表示 & マップ描画 ---
+DEFAULT_LAT = 37.76162301842977
+DEFAULT_LON = 140.47599584578793
+
 if "result" in st.session_state:
     res = st.session_state.result
     st.divider()
@@ -296,152 +385,67 @@ if "result" in st.session_state:
 
     st.dataframe(res_disp, use_container_width=True)
 
-    st.subheader("🗺 マッププレビュー & 描画ツール")
     valid_map_data = res[(res["緯度"] > 20) & (res["経度"] > 120)]
-
     if not valid_map_data.empty:
-        avg_lat = valid_map_data["緯度"].mean()
-        avg_lon = valid_map_data["経度"].mean()
+        center_lat = valid_map_data["緯度"].mean()
+        center_lon = valid_map_data["経度"].mean()
+        zoom_level = 18
+    else:
+        center_lat = DEFAULT_LAT
+        center_lon = DEFAULT_LON
+        zoom_level = 14
+else:
+    valid_map_data = pd.DataFrame()
+    center_lat = DEFAULT_LAT
+    center_lon = DEFAULT_LON
+    zoom_level = 14
 
-        if map_type == "航空写真":
-            tiles_url = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg"
-            attr = "GSI"
-        else:
-            tiles_url = "OpenStreetMap"
-            attr = "OpenStreetMap"
+st.subheader("🗺 マッププレビュー & 描画ツール")
 
-        m = folium.Map(location=[avg_lat, avg_lon], zoom_start=18, tiles=tiles_url, attr=attr)
+if map_type == "航空写真":
+    tiles_url = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg"
+    attr = "GSI"
+else:
+    tiles_url = "OpenStreetMap"
+    attr = "OpenStreetMap"
 
-        fg = folium.FeatureGroup(name="Markers")
-        for _, row in valid_map_data.iterrows():
-            folium.Marker(
-                [row["緯度"], row["経度"]],
-                popup=str(row["点名"]),
-                tooltip=str(row["点名"])
-            ).add_to(fg)
-            folium.Marker(
-                [row["緯度"], row["経度"]],
-                icon=folium.DivIcon(
-                    icon_size=(150, 30), icon_anchor=(7, 25),
-                    html='<div style="font-size:11pt;color:red;font-weight:bold;'
-                         'text-shadow:2px 2px 2px #fff;">' + str(row["点名"]) + '</div>'
-                )
-            ).add_to(fg)
-        fg.add_to(m)
+m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom_level, tiles=tiles_url, attr=attr)
 
-        draw = Draw(
-            export=False,
-            draw_options={
-                "marker": True,
-                "polyline": True,
-                "rectangle": True,
-                "polygon": True,
-                "circle": False,
-                "circlemarker": False,
-            },
-            edit_options={"edit": {}, "remove": {}}
-        )
-        draw.add_to(m)
-
-        map_key = st.session_state.get("map_key", "folium_map_fixed")
-        output = st_folium(m, width=1200, height=600, key=map_key)
-
-        # マップ描画直後にdrawn_dataを保存
-        if output.get("all_drawings") is not None:
-            st.session_state.drawn_data = output
-
-        all_drawings = output.get("all_drawings") or []
-        non_point_count = sum(
-            1 for f in all_drawings
-            if f.get("geometry", {}).get("type") != "Point"
-        )
-
-        # ★ KMLダウンロードボタンをマップの直下に配置
-        st.divider()
-        st.subheader("💾 成果品保存（KML）")
-        col_kml1, col_kml2 = st.columns(2)
-
-        with col_kml1:
-            kml_export_type = st.selectbox(
-                "KML出力対象を選択",
-                ["ポイントと図形の両方", "ポイントのみ", "図形のみ"],
-                index=0,
-                key="kml_type_select"
+if not valid_map_data.empty:
+    fg = folium.FeatureGroup(name="Markers")
+    for _, row in valid_map_data.iterrows():
+        folium.Marker(
+            [row["緯度"], row["経度"]],
+            popup=str(row["点名"]),
+            tooltip=str(row["点名"])
+        ).add_to(fg)
+        folium.Marker(
+            [row["緯度"], row["経度"]],
+            icon=folium.DivIcon(
+                icon_size=(150, 30), icon_anchor=(7, 25),
+                html='<div style="font-size:11pt;color:red;font-weight:bold;'
+                     'text-shadow:2px 2px 2px #fff;">' + str(row["点名"]) + '</div>'
             )
+        ).add_to(fg)
+    fg.add_to(m)
 
-        with col_kml2:
-            current_drawn = st.session_state.get("drawn_data", {})
-            kml_bytes = build_kml(res, kml_export_type, current_drawn)
-            if non_point_count > 0:
-                st.info(f"✏️ 描画済み図形: {non_point_count} 件")
-            st.download_button(
-                label="🌍 KMLを保存",
-                data=kml_bytes,
-                file_name=f"spatial_data_{int(time.time())}.kml",
-                mime="application/vnd.google-earth.kml+xml",
-                use_container_width=True
-            )
+draw = Draw(
+    export=False,
+    draw_options={
+        "marker": True,
+        "polyline": True,
+        "rectangle": True,
+        "polygon": True,
+        "circle": False,
+        "circlemarker": False,
+    },
+    edit_options={"edit": {}, "remove": {}}
+)
+draw.add_to(m)
 
-        # マーカー追加UI
-        placed_markers = [
-            f for f in all_drawings
-            if f.get("geometry", {}).get("type") == "Point"
-        ]
+map_key = st.session_state.get("map_key", "folium_map_fixed")
+output = st_folium(m, width=1200, height=600, key=map_key)
 
-        if placed_markers:
-            st.divider()
-
-            if "registered_marker_coords" not in st.session_state:
-                st.session_state.registered_marker_coords = []
-
-            registered = st.session_state.registered_marker_coords
-            new_markers = []
-            for feat in placed_markers:
-                coords = feat["geometry"]["coordinates"]
-                coord_key = (round(coords[1], 8), round(coords[0], 8))
-                if coord_key not in registered:
-                    new_markers.append((coords[1], coords[0]))
-
-            if new_markers:
-                st.info(f"📍 未登録のマーカーが {len(new_markers)} 件あります。位置を確認してから追加してください。")
-                st.caption("💡 位置を修正する場合は鉛筆アイコン（Edit）でドラッグ → Save してから追加ボタンを押してください。")
-
-                if st.button("➕ マーカーを変換リストに追加", type="primary"):
-                    existing_click_nums = []
-                    for name in st.session_state.result["点名"].astype(str):
-                        if name.startswith("Click_"):
-                            try:
-                                existing_click_nums.append(int(name.split("_")[1]))
-                            except ValueError:
-                                pass
-                    next_num = max(existing_click_nums, default=0) + 1
-
-                    new_rows = []
-                    newly_registered = []
-                    for m_lat, m_lon in new_markers:
-                        y_val, x_val = transformer_inv.transform(m_lon, m_lat)
-                        gh = get_geoid_height(m_lat, m_lon, use_geoid)
-                        point_name = f"Click_{next_num}"
-                        next_num += 1
-                        new_rows.append({
-                            "点名": point_name,
-                            "X": round(x_val, 4),
-                            "Y": round(y_val, 4),
-                            "標高H": 0.0,
-                            "緯度": m_lat,
-                            "経度": m_lon,
-                            "ジオイド高": gh,
-                            "楕円体高": round(0.0 + gh + offset_val, 4),
-                            "適用モデル": use_geoid
-                        })
-                        newly_registered.append((round(m_lat, 8), round(m_lon, 8)))
-
-                    st.session_state.result = pd.concat(
-                        [st.session_state.result, pd.DataFrame(new_rows)],
-                        ignore_index=True
-                    )
-                    st.session_state.registered_marker_coords.extend(newly_registered)
-                    st.success(f"✅ {len(new_rows)} 件を変換リストに追加しました。")
-                    st.rerun()
-            else:
-                st.success("✅ 配置済みのマーカーはすべてリストに登録されています。")
+# マップ描画直後にdrawn_dataを保存
+if output.get("all_drawings") is not None:
+    st.session_state.drawn_data = output
