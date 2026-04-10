@@ -300,6 +300,15 @@ if _placed_markers_sb:
                 ignore_index=True
             )
             st.session_state.registered_marker_coords.extend(_newly_registered)
+            # rerun前にdrawn_dataのポリゴンを明示的に保全する
+            # （rerun後のマップ初期描画で all_drawings=[] が返っても消えないようにする）
+            _cur_drawings = st.session_state.get("drawn_data", {}).get("all_drawings") or []
+            _cur_non_points = [f for f in _cur_drawings if f.get("geometry", {}).get("type") != "Point"]
+            # マーカーは登録済みになるのでPointは引き継がない（Drawプラグインが管理）
+            st.session_state.drawn_data = {
+                "all_drawings": _cur_non_points,
+                "last_active_drawing": None,
+            }
             st.rerun()
     else:
         st.sidebar.success("✅ 全マーカー登録済み")
@@ -330,6 +339,14 @@ def run_calculation_process(input_df):
     })
     if "registered_marker_coords" not in st.session_state:
         st.session_state.registered_marker_coords = []
+    # rerun前にdrawn_dataのポリゴンを保全
+    _cur_drawings2 = st.session_state.get("drawn_data", {}).get("all_drawings") or []
+    _cur_non_points2 = [f for f in _cur_drawings2 if f.get("geometry", {}).get("type") != "Point"]
+    if _cur_non_points2:
+        st.session_state.drawn_data = {
+            "all_drawings": _cur_non_points2,
+            "last_active_drawing": None,
+        }
     st.rerun()
 
 with tab1:
@@ -481,20 +498,30 @@ map_key = st.session_state.get("map_key", "folium_map_fixed")
 output = st_folium(m, width=1200, height=600, key=map_key)
 
 # マップ描画直後にdrawn_dataを保存
-# all_drawings が None(未操作) の場合は上書きしない。
-# 新規描画物と既存保存済み図形をマージして保持する。
-if output.get("all_drawings") is not None:
-    new_drawings = output.get("all_drawings", [])
-    new_non_points = [f for f in new_drawings if f.get("geometry", {}).get("type") != "Point"]
-    new_points     = [f for f in new_drawings if f.get("geometry", {}).get("type") == "Point"]
+# 【設計方針】
+# - ポリゴン/ラインは session_state で永続管理し、rerun や マーカー追加で絶対に消さない
+# - Drawプラグインが返す all_drawings はあくまでヒントとして使い、
+#   非ポイント図形は「明示的に新しいものが描かれた時だけ」更新する
+# - all_drawings が None の場合（マップ未操作）は一切上書きしない
+raw_drawings = output.get("all_drawings")
+if raw_drawings is not None:
+    new_non_points = [f for f in raw_drawings if f.get("geometry", {}).get("type") != "Point"]
+    new_points     = [f for f in raw_drawings if f.get("geometry", {}).get("type") == "Point"]
 
-    # Drawプラグインで新しく描いた非ポイント図形があれば更新、なければ既存を維持
+    # 非ポイント図形の更新ルール：
+    #   Drawプラグインが1件以上の非ポイント図形を返した → ユーザーが描いた → 採用
+    #   空リスト [] を返した               → rerun後の初期化や未操作 → 既存を維持
     if new_non_points:
-        merged_non_points = new_non_points
+        keep_non_points = new_non_points
     else:
-        merged_non_points = _non_point_restore  # 再利用
+        # 既存 drawn_data の非ポイント図形をそのまま維持
+        keep_non_points = [
+            f for f in (st.session_state.get("drawn_data", {}).get("all_drawings") or [])
+            if f.get("geometry", {}).get("type") != "Point"
+        ]
 
+    # ポイント（マーカー）は Drawプラグインの値をそのまま使う
     st.session_state.drawn_data = {
-        "all_drawings": merged_non_points + new_points,
+        "all_drawings": keep_non_points + new_points,
         "last_active_drawing": output.get("last_active_drawing"),
     }
