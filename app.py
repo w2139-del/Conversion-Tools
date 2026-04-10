@@ -79,25 +79,31 @@ def read_csv_auto(uploaded_file):
     return df
 
 def build_kml(res_data, kml_export_type, drawn_data):
-    """Google Earth完全対応KML生成（<name>タグ使用）"""
-    placemarks = []
+    """Google Earth対応KML生成 ※nameタグを正しく使用"""
+    TAG_OPEN  = "<name>"
+    TAG_CLOSE = "</name>"
+
+    lines = []
+    lines.append('<?xml version="1.0" encoding="UTF-8"?>')
+    lines.append('<kml xmlns="http://www.opengis.net/kml/2.2">')
+    lines.append("  <Document>")
+    lines.append("  " + TAG_OPEN + "spatial_data" + TAG_CLOSE)
 
     # ポイント出力
     if "ポイント" in kml_export_type and res_data is not None:
         for _, r in res_data.iterrows():
             pname = str(r["点名"]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            placemark = (
-                "    <Placemark>\n"
-                "      <name>" + pname + "</name>\n"
-                "      <Style><IconStyle><Icon>\n"
-                "        <href>http://maps.google.com/mapfiles/kml/paddle/red-circle.png</href>\n"
-                "      </Icon></IconStyle></Style>\n"
-                "      <Point>\n"
-                "        <coordinates>" + str(r["経度"]) + "," + str(r["緯度"]) + "," + str(r["楕円体高"]) + "</coordinates>\n"
-                "      </Point>\n"
-                "    </Placemark>"
-            )
-            placemarks.append(placemark)
+            lines += [
+                "    <Placemark>",
+                "      " + TAG_OPEN + pname + TAG_CLOSE,
+                "      <Style><IconStyle><Icon>",
+                "        <href>http://maps.google.com/mapfiles/kml/paddle/red-circle.png</href>",
+                "      </Icon></IconStyle></Style>",
+                "      <Point>",
+                "        <coordinates>" + str(r["経度"]) + "," + str(r["緯度"]) + "," + str(r["楕円体高"]) + "</coordinates>",
+                "      </Point>",
+                "    </Placemark>",
+            ]
 
     # ポリゴン・ライン出力
     if "ポリゴン" in kml_export_type and drawn_data:
@@ -114,21 +120,20 @@ def build_kml(res_data, kml_export_type, drawn_data):
                 if coords[0] != coords[-1]:
                     coords = coords + [coords[0]]
                 coord_str = " ".join(str(c[0]) + "," + str(c[1]) + ",0" for c in coords)
-                placemark = (
-                    "    <Placemark>\n"
-                    "      <name>Polygon_" + str(poly_count) + "</name>\n"
-                    "      <Style>\n"
-                    "        <LineStyle><color>ffff0000</color><width>2</width></LineStyle>\n"
-                    "        <PolyStyle><color>6400ffff</color><fill>1</fill><outline>1</outline></PolyStyle>\n"
-                    "      </Style>\n"
-                    "      <Polygon>\n"
-                    "        <outerBoundaryIs><LinearRing>\n"
-                    "          <coordinates>" + coord_str + "</coordinates>\n"
-                    "        </LinearRing></outerBoundaryIs>\n"
-                    "      </Polygon>\n"
-                    "    </Placemark>"
-                )
-                placemarks.append(placemark)
+                lines += [
+                    "    <Placemark>",
+                    "      " + TAG_OPEN + "Polygon_" + str(poly_count) + TAG_CLOSE,
+                    "      <Style>",
+                    "        <LineStyle><color>ffff0000</color><width>2</width></LineStyle>",
+                    "        <PolyStyle><color>6400ffff</color><fill>1</fill><outline>1</outline></PolyStyle>",
+                    "      </Style>",
+                    "      <Polygon>",
+                    "        <outerBoundaryIs><LinearRing>",
+                    "          <coordinates>" + coord_str + "</coordinates>",
+                    "        </LinearRing></outerBoundaryIs>",
+                    "      </Polygon>",
+                    "    </Placemark>",
+                ]
                 poly_count += 1
 
             elif geom.get("type") == "LineString":
@@ -136,29 +141,20 @@ def build_kml(res_data, kml_export_type, drawn_data):
                 if len(coords) < 2:
                     continue
                 coord_str = " ".join(str(c[0]) + "," + str(c[1]) + ",0" for c in coords)
-                placemark = (
-                    "    <Placemark>\n"
-                    "      <name>Line_" + str(line_count) + "</name>\n"
-                    "      <Style><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>\n"
-                    "      <LineString>\n"
-                    "        <coordinates>" + coord_str + "</coordinates>\n"
-                    "      </LineString>\n"
-                    "    </Placemark>"
-                )
-                placemarks.append(placemark)
+                lines += [
+                    "    <Placemark>",
+                    "      " + TAG_OPEN + "Line_" + str(line_count) + TAG_CLOSE,
+                    "      <Style><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>",
+                    "      <LineString>",
+                    "        <coordinates>" + coord_str + "</coordinates>",
+                    "      </LineString>",
+                    "    </Placemark>",
+                ]
                 line_count += 1
 
-    body = "\n".join(placemarks)
-    kml_str = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<kml xmlns="http://www.opengis.net/kml/2.2">\n'
-        '  <Document>\n'
-        '    <name>spatial_data</name>\n'
-        + body + "\n"
-        '  </Document>\n'
-        '</kml>'
-    )
-    return kml_str.encode("utf-8")
+    lines.append("  </Document>")
+    lines.append("</kml>")
+    return "\n".join(lines).encode("utf-8")
 
 # --- 3. サイドバー設定 ---
 st.sidebar.header("⚙️ 変換設定")
@@ -198,7 +194,6 @@ else:
     st.sidebar.info("計算を実行するとCSV保存ボタンが表示されます。")
 
 # --- KML保存（サイドバー）---
-# drawn_data は session_state から読む（マップレンダリング後に更新される）
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 KML保存")
 _sb_drawn = st.session_state.get("drawn_data", {})
@@ -230,8 +225,7 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("📍 マーカー追加")
 st.sidebar.warning(f"⚠️ 現在の系番号: **第{zone}系**\n\nマーカー追加前に上記「変換設定」で正しい系番号を設定してください。")
 
-_all_drawings_sb = _sb_drawings  # KML用に取得済みのものを再利用
-_placed_markers_sb = [f for f in _all_drawings_sb if f.get("geometry", {}).get("type") == "Point"]
+_placed_markers_sb = [f for f in _sb_drawings if f.get("geometry", {}).get("type") == "Point"]
 
 if _placed_markers_sb:
     if "registered_marker_coords" not in st.session_state:
@@ -284,7 +278,7 @@ if _placed_markers_sb:
                 ignore_index=True
             )
             st.session_state.registered_marker_coords.extend(_newly_registered)
-            # rerun不要：次のレンダリングで自動反映される
+            st.rerun()
     else:
         st.sidebar.success("✅ 全マーカー登録済み")
 else:
@@ -364,6 +358,7 @@ with tab3:
        - 位置が確定したらサイドバーの「**➕ マーカーを変換リストに追加**」ボタンを押します。
        - 座標変換前（初期マップ状態）でもマーカーを追加できます。
     6. **KML保存**: ポリゴン描画後、サイドバーの「**🌍 KMLを保存**」ボタンから保存してください。
+       ※ポリゴン描画後、**一度マップ外をクリックしてから**保存ボタンを押してください（描画確定のため）。
     """)
 
 # --- 5. 結果表示 & マップ描画 ---
@@ -412,6 +407,22 @@ else:
 
 m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom_level, tiles=tiles_url, attr=attr)
 
+# --- 保存済みポリゴン・ラインをGeoJsonとして地図上に復元（rerun後も消えない）---
+_restore_drawings = st.session_state.get("drawn_data", {}).get("all_drawings") or []
+_non_point_restore = [f for f in _restore_drawings if f.get("geometry", {}).get("type") != "Point"]
+if _non_point_restore:
+    geojson_data = {"type": "FeatureCollection", "features": _non_point_restore}
+    folium.GeoJson(
+        geojson_data,
+        name="saved_drawings",
+        style_function=lambda feat: {
+            "color": "#ff0000" if feat["geometry"]["type"] == "LineString" else "#0000ff",
+            "weight": 2,
+            "fillColor": "#00ffff",
+            "fillOpacity": 0.25,
+        }
+    ).add_to(m)
+
 if not valid_map_data.empty:
     fg = folium.FeatureGroup(name="Markers")
     for _, row in valid_map_data.iterrows():
@@ -448,9 +459,20 @@ map_key = st.session_state.get("map_key", "folium_map_fixed")
 output = st_folium(m, width=1200, height=600, key=map_key)
 
 # マップ描画直後にdrawn_dataを保存
-# all_drawings が None(未操作) の場合は上書きしない。空リスト [] は「全削除」なので保存する。
+# all_drawings が None(未操作) の場合は上書きしない。
+# 新規描画物と既存保存済み図形をマージして保持する。
 if output.get("all_drawings") is not None:
+    new_drawings = output.get("all_drawings", [])
+    new_non_points = [f for f in new_drawings if f.get("geometry", {}).get("type") != "Point"]
+    new_points     = [f for f in new_drawings if f.get("geometry", {}).get("type") == "Point"]
+
+    # Drawプラグインで新しく描いた非ポイント図形があれば更新、なければ既存を維持
+    if new_non_points:
+        merged_non_points = new_non_points
+    else:
+        merged_non_points = _non_point_restore  # 再利用
+
     st.session_state.drawn_data = {
-        "all_drawings": output.get("all_drawings", []),
+        "all_drawings": merged_non_points + new_points,
         "last_active_drawing": output.get("last_active_drawing"),
     }
