@@ -178,6 +178,8 @@ st.sidebar.header("💾 成果品保存")
 
 latlon_format = "10進法 (DD)"
 
+latlon_format = "10進法 (DD)"
+
 if "result" in st.session_state:
     res_data = st.session_state.result
     latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
@@ -199,95 +201,78 @@ if "result" in st.session_state:
         mime="text/csv",
         use_container_width=True
     )
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🌍 KML保存")
-    kml_export_type = st.sidebar.selectbox(
-        "KML出力対象を選択",
-        ["ポイントと図形の両方", "ポイントのみ", "図形のみ"],
-        index=0,
-        key="kml_type_select"
-    )
-    current_drawn_sidebar = st.session_state.get("drawn_data", {})
-    kml_bytes_sidebar = build_kml(res_data, kml_export_type, current_drawn_sidebar)
-    non_point_count_sidebar = sum(
-        1 for f in current_drawn_sidebar.get("all_drawings", [])
-        if f.get("geometry", {}).get("type") != "Point"
-    )
-    if non_point_count_sidebar > 0:
-        st.sidebar.info(f"✏️ 描画済み図形: {non_point_count_sidebar} 件")
-    st.sidebar.download_button(
-        label="🌍 KMLを保存",
-        data=kml_bytes_sidebar,
-        file_name=f"spatial_data_{int(time.time())}.kml",
-        mime="application/vnd.google-earth.kml+xml",
-        use_container_width=True
-    )
-
-    # マーカー追加UIをサイドバーに表示
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📍 マーカー追加")
-    _all_drawings_sb = st.session_state.get("drawn_data", {}).get("all_drawings") or []
-    _placed_markers_sb = [
-        f for f in _all_drawings_sb
-        if f.get("geometry", {}).get("type") == "Point"
-    ]
-    if _placed_markers_sb:
-        if "registered_marker_coords" not in st.session_state:
-            st.session_state.registered_marker_coords = []
-        _registered_sb = st.session_state.registered_marker_coords
-        _new_markers_sb = []
-        for feat in _placed_markers_sb:
-            coords = feat["geometry"]["coordinates"]
-            coord_key = (round(coords[1], 8), round(coords[0], 8))
-            if coord_key not in _registered_sb:
-                _new_markers_sb.append((coords[1], coords[0]))
-        if _new_markers_sb:
-            st.sidebar.info(f"📍 未登録マーカー: {len(_new_markers_sb)} 件")
-            st.sidebar.caption("💡 位置修正は鉛筆アイコン（Edit）でドラッグ → Save 後に追加してください。")
-            if st.sidebar.button("➕ マーカーを変換リストに追加", type="primary", key="add_marker_sidebar"):
-                _transformer_inv_sb = Transformer.from_crs("EPSG:4326", f"EPSG:{6668 + zone}", always_xy=True)
-                _existing_click_nums = []
-                for name in st.session_state.result["点名"].astype(str):
-                    if name.startswith("Click_"):
-                        try:
-                            _existing_click_nums.append(int(name.split("_")[1]))
-                        except ValueError:
-                            pass
-                _next_num = max(_existing_click_nums, default=0) + 1
-                _new_rows = []
-                _newly_registered = []
-                for m_lat, m_lon in _new_markers_sb:
-                    y_val, x_val = _transformer_inv_sb.transform(m_lon, m_lat)
-                    gh = get_geoid_height(m_lat, m_lon, use_geoid)
-                    point_name = f"Click_{_next_num}"
-                    _next_num += 1
-                    _new_rows.append({
-                        "点名": point_name,
-                        "X": round(x_val, 4),
-                        "Y": round(y_val, 4),
-                        "標高H": 0.0,
-                        "緯度": m_lat,
-                        "経度": m_lon,
-                        "ジオイド高": gh,
-                        "楕円体高": round(0.0 + gh + offset_val, 4),
-                        "適用モデル": use_geoid
-                    })
-                    _newly_registered.append((round(m_lat, 8), round(m_lon, 8)))
-                st.session_state.result = pd.concat(
-                    [st.session_state.result, pd.DataFrame(_new_rows)],
-                    ignore_index=True
-                )
-                st.session_state.registered_marker_coords.extend(_newly_registered)
-                st.success(f"✅ {len(_new_rows)} 件を変換リストに追加しました。")
-                st.rerun()
-        else:
-            st.sidebar.success("✅ 全マーカー登録済み")
-    else:
-        st.sidebar.info("マップにマーカーを配置すると追加ボタンが表示されます。")
-
 else:
-    st.sidebar.info("計算を実行すると保存ボタンが表示されます。")
+    st.sidebar.info("計算を実行するとCSV保存ボタンが表示されます。")
+
+# --- KML保存はマップ直後に配置（drawn_dataの確実な反映のため） ---
+st.sidebar.markdown("---")
+st.sidebar.info("🌍 KML保存はマップ下の保存エリアから行ってください。")
+
+# --- マーカー追加（result有無に関わらず動作） ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("📍 マーカー追加")
+st.sidebar.warning(f"⚠️ 現在の系番号: **第{zone}系**\n\nマーカー追加前に上記「変換設定」で正しい系番号を設定してください。")
+_all_drawings_sb = st.session_state.get("drawn_data", {}).get("all_drawings") or []
+_placed_markers_sb = [
+    f for f in _all_drawings_sb
+    if f.get("geometry", {}).get("type") == "Point"
+]
+if _placed_markers_sb:
+    if "registered_marker_coords" not in st.session_state:
+        st.session_state.registered_marker_coords = []
+    _registered_sb = st.session_state.registered_marker_coords
+    _new_markers_sb = []
+    for feat in _placed_markers_sb:
+        coords = feat["geometry"]["coordinates"]
+        coord_key = (round(coords[1], 8), round(coords[0], 8))
+        if coord_key not in _registered_sb:
+            _new_markers_sb.append((coords[1], coords[0]))
+    if _new_markers_sb:
+        st.sidebar.info(f"📍 未登録マーカー: {len(_new_markers_sb)} 件")
+        st.sidebar.caption("💡 位置修正は鉛筆アイコン（Edit）でドラッグ → Save 後に追加してください。")
+        if st.sidebar.button("➕ マーカーを変換リストに追加", type="primary", key="add_marker_sidebar"):
+            _transformer_inv_sb = Transformer.from_crs("EPSG:4326", f"EPSG:{6668 + zone}", always_xy=True)
+            # result がなければ新規作成、あれば追記
+            _existing_result = st.session_state.get("result", pd.DataFrame(columns=["点名", "X", "Y", "標高H", "緯度", "経度", "ジオイド高", "楕円体高", "適用モデル"]))
+            _existing_click_nums = []
+            for name in _existing_result["点名"].astype(str):
+                if name.startswith("Click_"):
+                    try:
+                        _existing_click_nums.append(int(name.split("_")[1]))
+                    except ValueError:
+                        pass
+            _next_num = max(_existing_click_nums, default=0) + 1
+            _new_rows = []
+            _newly_registered = []
+            for m_lat, m_lon in _new_markers_sb:
+                y_val, x_val = _transformer_inv_sb.transform(m_lon, m_lat)
+                gh = get_geoid_height(m_lat, m_lon, use_geoid)
+                point_name = f"Click_{_next_num}"
+                _next_num += 1
+                _new_rows.append({
+                    "点名": point_name,
+                    "X": round(x_val, 4),
+                    "Y": round(y_val, 4),
+                    "標高H": 0.0,
+                    "緯度": m_lat,
+                    "経度": m_lon,
+                    "ジオイド高": gh,
+                    "楕円体高": round(0.0 + gh + offset_val, 4),
+                    "適用モデル": use_geoid
+                })
+                _newly_registered.append((round(m_lat, 8), round(m_lon, 8)))
+            st.session_state.result = pd.concat(
+                [_existing_result, pd.DataFrame(_new_rows)],
+                ignore_index=True
+            )
+            st.session_state.registered_marker_coords.extend(_newly_registered)
+            if "map_key" not in st.session_state:
+                st.session_state.map_key = "folium_map_fixed"
+            st.rerun()
+    else:
+        st.sidebar.success("✅ 全マーカー登録済み")
+else:
+    st.sidebar.info("マップにマーカーを配置すると追加ボタンが表示されます。")
 
 # --- 4. メインコンテンツ ---
 transformer = Transformer.from_crs(f"EPSG:{6668 + zone}", "EPSG:4326", always_xy=True)
@@ -359,10 +344,12 @@ with tab3:
     3. **マップ表示**: 変換が完了すると計算地点にピンが立ちます。
     4. **ポリゴン描画**: マップ左側の五角形アイコンで図形を描きます。ダブルクリックで確定。
     5. **マーカーで点追加**:
+       - サイドバーの「変換設定」で**系番号を正しく設定**してください（変換精度に直結します）。
        - マップ左側の「ピンアイコン（Marker）」をクリックし地図上に配置します。
        - 位置を間違えた場合は「鉛筆アイコン（Edit）」でドラッグして移動 → 「Save」で確定してください。
        - 位置が確定したら**サイドバーの「マーカーを変換リストに追加」ボタン**を押します。
-    6. **KML保存**: ポリゴン描画後、**サイドバーの「KMLを保存」ボタン**から保存してください。
+       - 座標変換前（初期マップ状態）でもマーカーを追加できます。
+    6. **KML保存**: ポリゴン描画後、**マップ下の「KML保存」エリア**から保存してください。ポリゴンを描画してすぐ保存ボタンを押すと確実に図形が含まれます。
     """)
 
 # --- 5. 結果表示 & マップ描画 ---
@@ -447,5 +434,49 @@ map_key = st.session_state.get("map_key", "folium_map_fixed")
 output = st_folium(m, width=1200, height=600, key=map_key)
 
 # マップ描画直後にdrawn_dataを保存
+# all_drawings が None(未操作) の場合は上書きしない。空リスト [] は「全削除」なので保存する。
 if output.get("all_drawings") is not None:
-    st.session_state.drawn_data = output
+    st.session_state.drawn_data = {
+        "all_drawings": output.get("all_drawings", []),
+        "last_active_drawing": output.get("last_active_drawing"),
+    }
+
+# --- 6. KML保存エリア（マップ直後に配置 ※drawn_data確定後） ---
+st.divider()
+st.subheader("💾 KML保存")
+
+# 現在のdrawn_dataをoutputから直接取得（session_state経由より新しい）
+_current_all_drawings = output.get("all_drawings") or st.session_state.get("drawn_data", {}).get("all_drawings") or []
+_current_drawn_for_kml = {"all_drawings": _current_all_drawings}
+
+_non_point_drawings = [
+    f for f in _current_all_drawings
+    if f.get("geometry", {}).get("type") != "Point"
+]
+_kml_res = st.session_state.get("result", None)
+
+col_kml1, col_kml2, col_kml3 = st.columns([2, 1, 2])
+with col_kml1:
+    kml_export_type = st.selectbox(
+        "KML出力対象",
+        ["ポイントと図形の両方", "ポイントのみ", "図形のみ"],
+        index=0,
+        key="kml_type_select"
+    )
+with col_kml2:
+    if _non_point_drawings:
+        st.metric("描画済み図形", f"{len(_non_point_drawings)} 件")
+    else:
+        st.caption("図形未描画")
+with col_kml3:
+    # ポイントのみ選択時にresultがなければ警告
+    if "ポイント" in kml_export_type and _kml_res is None:
+        st.warning("⚠️ 変換結果がありません。ポイントはKMLに含まれません。")
+    kml_bytes = build_kml(_kml_res, kml_export_type, _current_drawn_for_kml)
+    st.download_button(
+        label="🌍 KMLを保存",
+        data=kml_bytes,
+        file_name=f"spatial_data_{int(time.time())}.kml",
+        mime="application/vnd.google-earth.kml+xml",
+        use_container_width=True
+    )
