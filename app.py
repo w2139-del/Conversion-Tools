@@ -235,7 +235,7 @@ else:
     c_lat, c_lon, zoom = 37.7616, 140.4760, 14
 
 # --- 5. マップ表示 ---
-st.subheader("🗺 マッププレビュー (点名を常に表示)")
+st.subheader("🗺 マッププレビュー")
 t_url = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg" if map_type=="航空写真" else "OpenStreetMap"
 m = folium.Map(location=[c_lat, c_lon], zoom_start=zoom, tiles=t_url, attr="GSI/OSM")
 
