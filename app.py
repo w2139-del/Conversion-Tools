@@ -40,7 +40,7 @@ def load_geoid_data():
 geoid_db = load_geoid_data()
 
 def get_geoid_height(lat, lon, model_name):
-    """ジオイド高の計算（バイリニア補間ロジックを完全維持）"""
+    """ジオイド高の計算（バイリニア補間ロジック）"""
     if model_name == "使用しない" or not geoid_db:
         return 0.0
     try:
@@ -69,7 +69,7 @@ def get_geoid_height(lat, lon, model_name):
         return 0.0
 
 def read_csv_auto(uploaded_file):
-    """CSV読み込み（ヘッダー自動判定を維持）"""
+    """CSV読み込み（ヘッダー自動判定）"""
     uploaded_file.seek(0)
     first_line = uploaded_file.readline().decode("shift-jis", errors="replace").strip()
     uploaded_file.seek(0)
@@ -91,32 +91,39 @@ def read_csv_auto(uploaded_file):
     return df.dropna(subset=["X", "Y", "H"])
 
 def build_kml(res_data, kml_export_type, non_point_features):
-    """Google Earth対応KML生成"""
-    NM_O = "<name>"
-    NM_C = "</name>"
+    """【修正済】Googleマイマップ対応KML生成ロジック"""
+    def escape_xml(text):
+        """XMLで禁止されている文字をエスケープする"""
+        return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     lines = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append('<kml xmlns="http://www.opengis.net/kml/2.2">')
     lines.append("  <Document>")
-    lines.append("    " + NM_O + "spatial_data" + NM_C)
+    lines.append(f"    <name>spatial_data_{int(time.time())}</name>")
     
+    # スタイル定義
     lines += [
         '    <Style id="poly_style"><LineStyle><color>ffff0000</color><width>2</width></LineStyle><PolyStyle><color>6400ffff</color><fill>1</fill><outline>1</outline></PolyStyle></Style>',
         '    <Style id="line_style"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>',
-        '    <Style id="point_style"><IconStyle><Icon><href>http://maps.google.com/mapfiles/kml/paddle/red-circle.png</href></Icon></IconStyle></Style>',
+        '    <Style id="point_style"><IconStyle><Icon><href>http://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png</href></Icon></IconStyle></Style>',
     ]
 
+    lines.append("    <Folder><name>Converted Data</name>")
+
+    # ポイントの出力
     if "ポイント" in kml_export_type and res_data is not None:
         for _, r in res_data.iterrows():
-            pname = str(r["点名"]).replace("&", "&").replace("<", "<").replace(">", ">")
+            safe_name = escape_xml(r["点名"])
             lines += [
-                "    <Placemark>",
-                "      " + NM_O + pname + NM_C,
-                "      <styleUrl>#point_style</styleUrl>",
-                "      <Point><coordinates>" + f"{r['経度']},{r['緯度']},{r['楕円体高']}" + "</coordinates></Point>",
-                "    </Placemark>",
+                "      <Placemark>",
+                f"        <name>{safe_name}</name>",
+                "        <styleUrl>#point_style</styleUrl>",
+                "        <Point><coordinates>" + f"{r['経度']},{r['緯度']},{r['楕円体高']}" + "</coordinates></Point>",
+                "      </Placemark>",
             ]
 
+    # 図形（ポリゴン・ライン）の出力
     if "図形" in kml_export_type and non_point_features:
         poly_count, line_count = 1, 1
         for feat in non_point_features:
@@ -127,19 +134,33 @@ def build_kml(res_data, kml_export_type, non_point_features):
                 if len(ring) < 3: continue
                 if ring[0] != ring[-1]: ring.append(ring[0])
                 coord_str = " ".join(f"{c[0]},{c[1]},0" for c in ring)
-                lines += ["    <Placemark><name>Polygon_"+str(poly_count)+"</name><styleUrl>#poly_style</styleUrl><Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>"+coord_str+"</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>"]
+                lines += [
+                    "      <Placemark>",
+                    f"        <name>Polygon_{poly_count}</name>",
+                    "        <styleUrl>#poly_style</styleUrl>",
+                    "        <Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>"+coord_str+"</coordinates></LinearRing></outerBoundaryIs></Polygon>",
+                    "      </Placemark>"
+                ]
                 poly_count += 1
             elif g_type == "LineString":
                 if len(coords) < 2: continue
                 coord_str = " ".join(f"{c[0]},{c[1]},0" for c in coords)
-                lines += ["    <Placemark><name>Line_"+str(line_count)+"</name><styleUrl>#line_style</styleUrl><LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>"+coord_str+"</coordinates></LineString></Placemark>"]
+                lines += [
+                    "      <Placemark>",
+                    f"        <name>Line_{line_count}</name>",
+                    "        <styleUrl>#line_style</styleUrl>",
+                    "        <LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>"+coord_str+"</coordinates></LineString>",
+                    "      </Placemark>"
+                ]
                 line_count += 1
 
-    lines.append("  </Document></kml>")
+    lines.append("    </Folder>")
+    lines.append("  </Document>")
+    lines.append("</kml>")
     return "\n".join(lines).encode("utf-8")
 
 # =============================================================================
-# 初期化
+# セッション初期化
 # =============================================================================
 for key in ["saved_polygons", "map_markers", "registered_marker_coords"]:
     if key not in st.session_state: st.session_state[key] = []
@@ -235,7 +256,7 @@ else:
     c_lat, c_lon, zoom = 37.7616, 140.4760, 14
 
 # --- 5. マップ表示 ---
-st.subheader("🗺 マッププレビュー")
+st.subheader("🗺 マッププレビュー (点名を常に表示)")
 t_url = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg" if map_type=="航空写真" else "OpenStreetMap"
 m = folium.Map(location=[c_lat, c_lon], zoom_start=zoom, tiles=t_url, attr="GSI/OSM")
 
@@ -244,7 +265,6 @@ if st.session_state.saved_polygons:
 
 if "result" in st.session_state:
     for _, r in st.session_state.result.iterrows():
-        # 【修正ポイント】Tooltipのpermanent=Trueで点名を常時表示
         folium.Marker(
             [r["緯度"], r["経度"]], 
             popup=str(r["点名"]),
