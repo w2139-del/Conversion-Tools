@@ -40,7 +40,7 @@ def load_geoid_data():
 geoid_db = load_geoid_data()
 
 def get_geoid_height(lat, lon, model_name):
-    """ジオイド高の計算（バイリニア補間ロジック）"""
+    """ジオイド高の計算（バイリニア補間）"""
     if model_name == "使用しない" or not geoid_db:
         return 0.0
     try:
@@ -91,9 +91,9 @@ def read_csv_auto(uploaded_file):
     return df.dropna(subset=["X", "Y", "H"])
 
 def build_kml(res_data, kml_export_type, non_point_features):
-    """【修正済】Googleマイマップ対応KML生成ロジック"""
+    """【完全修正版】Googleマイマップ対応KML生成"""
     def escape_xml(text):
-        """XMLで禁止されている文字をエスケープする"""
+        """XML特殊文字を確実にエスケープする"""
         return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     lines = []
@@ -102,16 +102,16 @@ def build_kml(res_data, kml_export_type, non_point_features):
     lines.append("  <Document>")
     lines.append(f"    <name>spatial_data_{int(time.time())}</name>")
     
-    # スタイル定義
+    # スタイル定義 (Google標準のプッシュピンURLを使用)
     lines += [
         '    <Style id="poly_style"><LineStyle><color>ffff0000</color><width>2</width></LineStyle><PolyStyle><color>6400ffff</color><fill>1</fill><outline>1</outline></PolyStyle></Style>',
         '    <Style id="line_style"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>',
-        '    <Style id="point_style"><IconStyle><Icon><href>http://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png</href></Icon></IconStyle></Style>',
+        '    <Style id="point_style"><IconStyle><Icon><href>https://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png</href></Icon></IconStyle></Style>',
     ]
 
     lines.append("    <Folder><name>Converted Data</name>")
 
-    # ポイントの出力
+    # ポイント出力
     if "ポイント" in kml_export_type and res_data is not None:
         for _, r in res_data.iterrows():
             safe_name = escape_xml(r["点名"])
@@ -123,7 +123,7 @@ def build_kml(res_data, kml_export_type, non_point_features):
                 "      </Placemark>",
             ]
 
-    # 図形（ポリゴン・ライン）の出力
+    # 図形出力
     if "図形" in kml_export_type and non_point_features:
         poly_count, line_count = 1, 1
         for feat in non_point_features:
@@ -160,7 +160,7 @@ def build_kml(res_data, kml_export_type, non_point_features):
     return "\n".join(lines).encode("utf-8")
 
 # =============================================================================
-# セッション初期化
+# 初期化
 # =============================================================================
 for key in ["saved_polygons", "map_markers", "registered_marker_coords"]:
     if key not in st.session_state: st.session_state[key] = []
