@@ -94,7 +94,7 @@ def build_kml(res_data, kml_export_type, non_point_features):
     """【完全修正版】Googleマイマップ対応KML生成"""
     def escape_xml(text):
         """XML特殊文字を確実にエスケープする"""
-        return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return str(text).replace("&", "&").replace("<", "<").replace(">", ">")
 
     lines = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
@@ -184,7 +184,8 @@ if "result" in st.session_state:
         disp_csv["緯度"] = disp_csv["緯度"].map(decimal_to_dms)
         disp_csv["経度"] = disp_csv["経度"].map(decimal_to_dms)
     else:
-        for c in ["緯度", "経度"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.8f}")
+        # 【修正箇所】Excelでの表示切れを防ぐため、精度を .9f (小数点以下9桁) に変更
+        for c in ["緯度", "経度"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.9f}")
     for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
     st.sidebar.download_button(label="📊 CSVを保存", data=disp_csv.to_csv(index=False).encode("utf-8-sig"), file_name=f"result_{int(time.time())}.csv", mime="text/csv", use_container_width=True)
 
@@ -248,7 +249,8 @@ if "result" in st.session_state:
     if latlon_format == "60進法 (DMS)":
         res_disp["緯度"], res_disp["経度"] = res_disp["緯度"].map(decimal_to_dms), res_disp["経度"].map(decimal_to_dms)
     else:
-        res_disp["緯度"], res_disp["経度"] = res_disp["緯度"].map(lambda x: f"{x:.8f}"), res_disp["経度"].map(lambda x: f"{x:.8f}")
+        # 【修正箇所】画面表示も一貫性を持たせるため .9f に変更
+        res_disp["緯度"], res_disp["経度"] = res_disp["緯度"].map(lambda x: f"{x:.9f}"), res_disp["経度"].map(lambda x: f"{x:.9f}")
     for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: res_disp[c] = res_disp[c].map(lambda x: f"{x:.4f}")
     st.dataframe(res_disp, use_container_width=True)
     c_lat, c_lon, zoom = st.session_state.result["緯度"].mean(), st.session_state.result["経度"].mean(), 18
@@ -256,7 +258,7 @@ else:
     c_lat, c_lon, zoom = 37.7616, 140.4760, 14
 
 # --- 5. マップ表示 ---
-st.subheader("🗺 マッププレビュー (点名を常に表示)")
+st.subheader("🗺 マッププレビュー")
 t_url = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg" if map_type=="航空写真" else "OpenStreetMap"
 m = folium.Map(location=[c_lat, c_lon], zoom_start=zoom, tiles=t_url, attr="GSI/OSM")
 
