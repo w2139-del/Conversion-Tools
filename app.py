@@ -15,7 +15,7 @@ st.title("緯度経度変換ツール")
 
 # --- 2. ユーティリティ関数 ---
 def decimal_to_dms(deg):
-    """10進法度をDMS形式(度分秒)の文字列に変換"""
+    """10進法度をDMS形式(度分秒)に変換"""
     d = int(deg)
     m = int((deg - d) * 60)
     s = (deg - d - m / 60) * 3600
@@ -40,7 +40,7 @@ def load_geoid_data():
 geoid_db = load_geoid_data()
 
 def get_geoid_height(lat, lon, model_name):
-    """ジオイド高の計算（バイリニア補間）"""
+    """ジオイド高の計算"""
     if model_name == "使用しない" or not geoid_db:
         return 0.0
     try:
@@ -69,7 +69,7 @@ def get_geoid_height(lat, lon, model_name):
         return 0.0
 
 def read_csv_auto(uploaded_file):
-    """CSV読み込み（ヘッダー自動判定）"""
+    """CSV読み込み"""
     uploaded_file.seek(0)
     first_line = uploaded_file.readline().decode("shift-jis", errors="replace").strip()
     uploaded_file.seek(0)
@@ -91,77 +91,52 @@ def read_csv_auto(uploaded_file):
     return df.dropna(subset=["X", "Y", "H"])
 
 def build_kml(res_data, kml_export_type, non_point_features):
-    """【完全修正版】Googleマイマップ対応KML生成"""
+    """【修正版】Googleマイマップ互換性を最大化したKML生成"""
     def escape_xml(text):
-        """XML特殊文字を確実にエスケープする"""
-        return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return str(text).replace("&", "&").replace("<", "<").replace(">", ">")
 
-    lines = []
-    lines.append('<?xml version="1.0" encoding="UTF-8"?>')
-    lines.append('<kml xmlns="http://www.opengis.net/kml/2.2">')
-    lines.append("  <Document>")
-    lines.append(f"    <name>spatial_data_{int(time.time())}</name>")
-    
-    # スタイル定義 (Google標準のプッシュピンURLを使用)
-    lines += [
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '  <Document>',
+        f'    <name>spatial_data_{int(time.time())}</name>',
+        '    <Style id="point_style"><IconStyle><Icon><href>http://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png</href></Icon></IconStyle></Style>',
         '    <Style id="poly_style"><LineStyle><color>ffff0000</color><width>2</width></LineStyle><PolyStyle><color>6400ffff</color><fill>1</fill><outline>1</outline></PolyStyle></Style>',
         '    <Style id="line_style"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>',
-        '    <Style id="point_style"><IconStyle><Icon><href>https://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png</href></Icon></IconStyle></Style>',
+        '    <Folder><name>Points</name>'
     ]
 
-    lines.append("    <Folder><name>Converted Data</name>")
-
-    # ポイント出力
     if "ポイント" in kml_export_type and res_data is not None:
         for _, r in res_data.iterrows():
-            safe_name = escape_xml(r["点名"])
             lines += [
                 "      <Placemark>",
-                f"        <name>{safe_name}</name>",
+                f"        <name>{escape_xml(r['点名'])}</name>",
                 "        <styleUrl>#point_style</styleUrl>",
-                "        <Point><coordinates>" + f"{r['経度']},{r['緯度']},{r['楕円体高']}" + "</coordinates></Point>",
-                "      </Placemark>",
+                f"        <Point><coordinates>{r['経度']},{r['緯度']},{r['楕円体高']}</coordinates></Point>",
+                "      </Placemark>"
             ]
-
-    # 図形出力
+    
+    lines.append('    </Folder>')
+    
     if "図形" in kml_export_type and non_point_features:
-        poly_count, line_count = 1, 1
-        for feat in non_point_features:
+        lines.append('    <Folder><name>Shapes</name>')
+        for i, feat in enumerate(non_point_features):
             geom = feat.get("geometry", {})
             g_type, coords = geom.get("type"), geom.get("coordinates", [])
             if g_type == "Polygon":
                 ring = list(coords[0])
-                if len(ring) < 3: continue
                 if ring[0] != ring[-1]: ring.append(ring[0])
-                coord_str = " ".join(f"{c[0]},{c[1]},0" for c in ring)
-                lines += [
-                    "      <Placemark>",
-                    f"        <name>Polygon_{poly_count}</name>",
-                    "        <styleUrl>#poly_style</styleUrl>",
-                    "        <Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>"+coord_str+"</coordinates></LinearRing></outerBoundaryIs></Polygon>",
-                    "      </Placemark>"
-                ]
-                poly_count += 1
+                c_str = " ".join(f"{c[0]},{c[1]},0" for c in ring)
+                lines += [f"<Placemark><name>Poly_{i}</name><styleUrl>#poly_style</styleUrl><Polygon><outerBoundaryIs><LinearRing><coordinates>{c_str}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>"]
             elif g_type == "LineString":
-                if len(coords) < 2: continue
-                coord_str = " ".join(f"{c[0]},{c[1]},0" for c in coords)
-                lines += [
-                    "      <Placemark>",
-                    f"        <name>Line_{line_count}</name>",
-                    "        <styleUrl>#line_style</styleUrl>",
-                    "        <LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>"+coord_str+"</coordinates></LineString>",
-                    "      </Placemark>"
-                ]
-                line_count += 1
+                c_str = " ".join(f"{c[0]},{c[1]},0" for c in coords)
+                lines += [f"<Placemark><name>Line_{i}</name><styleUrl>#line_style</styleUrl><LineString><coordinates>{c_str}</coordinates></LineString></Placemark>"]
+        lines.append('    </Folder>')
 
-    lines.append("    </Folder>")
-    lines.append("  </Document>")
-    lines.append("</kml>")
+    lines += ['  </Document>', '</kml>']
     return "\n".join(lines).encode("utf-8")
 
-# =============================================================================
-# 初期化
-# =============================================================================
+# --- セッション初期化 ---
 for key in ["saved_polygons", "map_markers", "registered_marker_coords"]:
     if key not in st.session_state: st.session_state[key] = []
 
@@ -175,7 +150,7 @@ map_type = st.sidebar.radio("背景地図", ["航空写真", "標準地図"])
 
 st.sidebar.markdown("---")
 st.sidebar.header("💾 成果品保存")
-latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0, key="fmt_radio")
+latlon_format = st.sidebar.radio("緯度経度の形式", ["10進法 (DD)", "60進法 (DMS)"], index=0)
 
 if "result" in st.session_state:
     res_data = st.session_state.result
@@ -184,8 +159,13 @@ if "result" in st.session_state:
         disp_csv["緯度"] = disp_csv["緯度"].map(decimal_to_dms)
         disp_csv["経度"] = disp_csv["経度"].map(decimal_to_dms)
     else:
-        for c in ["緯度", "経度"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.8f}")
-    for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
+        # 【修正】Excelでの表示を考慮し、あえて下9桁で出力して精度を確保
+        disp_csv["緯度"] = disp_csv["緯度"].map(lambda x: f"{x:.9f}")
+        disp_csv["経度"] = disp_csv["経度"].map(lambda x: f"{x:.9f}")
+    
+    for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: 
+        disp_csv[c] = disp_csv[c].map(lambda x: f"{x:.4f}")
+    
     st.sidebar.download_button(label="📊 CSVを保存", data=disp_csv.to_csv(index=False).encode("utf-8-sig"), file_name=f"result_{int(time.time())}.csv", mime="text/csv", use_container_width=True)
 
 st.sidebar.markdown("---")
@@ -194,25 +174,9 @@ kml_export_type = st.sidebar.selectbox("KML出力対象", ["ポイントと図�
 kml_bytes = build_kml(st.session_state.get("result"), kml_export_type, st.session_state.saved_polygons)
 st.sidebar.download_button(label="🌍 KMLを保存", data=kml_bytes, file_name=f"spatial_data_{int(time.time())}.kml", mime="application/vnd.google-earth.kml+xml", use_container_width=True)
 
-# マーカー追加
-st.sidebar.markdown("---")
-st.sidebar.subheader("📍 マーカー追加")
-_new_m = [m for m in st.session_state.map_markers if (round(m[0], 8), round(m[1], 8)) not in st.session_state.registered_marker_coords]
-if _new_m and st.sidebar.button("➕ マーカーを変換リストに追加", type="primary"):
-    _t_inv = Transformer.from_crs("EPSG:4326", f"EPSG:{6668 + zone}", always_xy=True)
-    _ext = st.session_state.get("result", pd.DataFrame(columns=["点名", "X", "Y", "標高H", "緯度", "経度", "ジオイド高", "楕円体高", "適用モデル"]))
-    _rows = []
-    for la, lo in _new_m:
-        y_v, x_v = _t_inv.transform(lo, la)
-        gh = get_geoid_height(la, lo, use_geoid)
-        _rows.append({"点名": f"Click_{len(_ext)+len(_rows)+1}", "X": round(x_v, 4), "Y": round(y_v, 4), "標高H": 0.0, "緯度": la, "経度": lo, "ジオイド高": gh, "楕円体高": round(0.0 + gh + offset_val, 4), "適用モデル": use_geoid})
-        st.session_state.registered_marker_coords.append((round(la, 8), round(lo, 8)))
-    st.session_state.result = pd.concat([_ext, pd.DataFrame(_rows)], ignore_index=True)
-    st.rerun()
-
 # --- 4. メインコンテンツ ---
 transformer = Transformer.from_crs(f"EPSG:{6668 + zone}", "EPSG:4326", always_xy=True)
-tab1, tab2, tab3 = st.tabs(["📝 1点手入力変換", "📂 ファイル一括変換", "📖 操作マニュアル"])
+tab1, tab2, tab3 = st.tabs(["📝 手入力", "📂 一括変換", "📖 ヘルプ"])
 
 def run_calc(input_df):
     if input_df.empty: return
@@ -223,12 +187,12 @@ def run_calc(input_df):
 
 with tab1:
     c1, c2, c3, c4 = st.columns(4)
-    p_n, p_x, p_y, p_h = c1.text_input("点名", "Point_1"), c2.number_input("X座標", value=0.0, format="%.4f"), c3.number_input("Y座標", value=0.0, format="%.4f"), c4.number_input("標高 H", value=0.0, format="%.4f")
-    if st.button("計算実行 (1点)", type="primary"): run_calc(pd.DataFrame([{"点名": p_n, "X": p_x, "Y": p_y, "H": p_h}]))
+    p_n, p_x, p_y, p_h = c1.text_input("点名", "P-1"), c2.number_input("X", value=0.0, format="%.4f"), c3.number_input("Y", value=0.0, format="%.4f"), c4.number_input("H", value=0.0, format="%.4f")
+    if st.button("計算実行", type="primary"): run_calc(pd.DataFrame([{"点名": p_n, "X": p_x, "Y": p_y, "H": p_h}]))
 
 with tab2:
-    up = st.file_uploader("CSV/SIMAアップロード", type=["csv", "sim"])
-    if up and st.button("一括計算開始 🚀", type="primary"):
+    up = st.file_uploader("CSV/SIMA", type=["csv", "sim"])
+    if up and st.button("一括変換開始", type="primary"):
         try:
             if up.name.lower().endswith(".sim"):
                 pts = []
@@ -240,53 +204,32 @@ with tab2:
             else: run_calc(read_csv_auto(up))
         except Exception as e: st.error(f"エラー: {e}")
 
-with tab3: st.markdown("### 📖 操作ガイド\n1. 設定を確認し計算を実行します。")
-
 if "result" in st.session_state:
     st.divider()
     res_disp = st.session_state.result.copy()
-    if latlon_format == "60進法 (DMS)":
-        res_disp["緯度"], res_disp["経度"] = res_disp["緯度"].map(decimal_to_dms), res_disp["経度"].map(decimal_to_dms)
-    else:
-        res_disp["緯度"], res_disp["経度"] = res_disp["緯度"].map(lambda x: f"{x:.8f}"), res_disp["経度"].map(lambda x: f"{x:.8f}")
-    for c in ["ジオイド高", "楕円体高", "X", "Y", "標高H"]: res_disp[c] = res_disp[c].map(lambda x: f"{x:.4f}")
+    # 画面表示も下9桁に統一
+    res_disp["緯度"] = res_disp["緯度"].map(lambda x: f"{x:.9f}")
+    res_disp["経度"] = res_disp["経度"].map(lambda x: f"{x:.9f}")
     st.dataframe(res_disp, use_container_width=True)
-    c_lat, c_lon, zoom = st.session_state.result["緯度"].mean(), st.session_state.result["経度"].mean(), 18
+    c_lat, c_lon = st.session_state.result["緯度"].mean(), st.session_state.result["経度"].mean()
 else:
-    c_lat, c_lon, zoom = 37.7616, 140.4760, 14
+    c_lat, c_lon = 37.7616, 140.4760
 
 # --- 5. マップ表示 ---
-st.subheader("🗺 マッププレビュー (点名を常に表示)")
-t_url = "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg" if map_type=="航空写真" else "OpenStreetMap"
-m = folium.Map(location=[c_lat, c_lon], zoom_start=zoom, tiles=t_url, attr="GSI/OSM")
-
+m = folium.Map(location=[c_lat, c_lon], zoom_start=17, tiles="OpenStreetMap" if map_type=="標準地図" else "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", attr="GSI")
+if "result" in st.session_state:
+    for _, r in st.session_state.result.iterrows():
+        folium.Marker([r["緯度"], r["経度"]], tooltip=folium.Tooltip(str(r["点名"]), permanent=True)).add_to(m)
 if st.session_state.saved_polygons:
     folium.GeoJson({"type": "FeatureCollection", "features": st.session_state.saved_polygons}).add_to(m)
 
-if "result" in st.session_state:
-    for _, r in st.session_state.result.iterrows():
-        folium.Marker(
-            [r["緯度"], r["経度"]], 
-            popup=str(r["点名"]),
-            tooltip=folium.Tooltip(str(r["点名"]), permanent=True) 
-        ).add_to(m)
+Draw(export=False).add_to(m)
+output = st_folium(m, width=1200, height=500)
 
-Draw(export=False, draw_options={"circle": False, "rectangle": True}).add_to(m)
-output = st_folium(m, width=1200, height=600, key="folium_map")
-
-# マップ更新処理
-last_active = output.get("last_active_drawing")
-if last_active:
-    g_type = last_active.get("geometry", {}).get("type", "")
-    if g_type in ("Polygon", "LineString"):
-        coords = last_active.get("geometry", {}).get("coordinates")
-        if coords not in [f.get("geometry", {}).get("coordinates") for f in st.session_state.saved_polygons]:
-            st.session_state.saved_polygons.append(last_active)
+# 描画データの保存
+last_draw = output.get("last_active_drawing")
+if last_draw:
+    if last_draw.get("geometry", {}).get("type") in ["Polygon", "LineString"]:
+        if last_draw not in st.session_state.saved_polygons:
+            st.session_state.saved_polygons.append(last_draw)
             st.rerun()
-    elif g_type == "Point":
-        coords = last_active.get("geometry", {}).get("coordinates", [])
-        if len(coords) >= 2:
-            p_key = (coords[1], coords[0])
-            if p_key not in st.session_state.map_markers:
-                st.session_state.map_markers.append(p_key)
-                st.rerun()
