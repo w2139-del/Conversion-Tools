@@ -91,10 +91,10 @@ def read_csv_auto(uploaded_file):
     return df.dropna(subset=["X", "Y", "H"])
 
 def build_kml(res_data, kml_export_type, non_point_features):
-    """【完全修正版】Googleマイマップ対応KML生成"""
+    """【DJI Pilot 2 / Googleマイマップ完全対応版】KML生成"""
     def escape_xml(text):
         """XML特殊文字を確実にエスケープする"""
-        return str(text).replace("&", "&").replace("<", "<").replace(">", ">")
+        return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     lines = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
@@ -102,28 +102,26 @@ def build_kml(res_data, kml_export_type, non_point_features):
     lines.append("  <Document>")
     lines.append(f"    <name>spatial_data_{int(time.time())}</name>")
     
-    # スタイル定義 (Google標準のプッシュピンURLを使用)
+    # スタイル定義
     lines += [
         '    <Style id="poly_style"><LineStyle><color>ffff0000</color><width>2</width></LineStyle><PolyStyle><color>6400ffff</color><fill>1</fill><outline>1</outline></PolyStyle></Style>',
         '    <Style id="line_style"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>',
         '    <Style id="point_style"><IconStyle><Icon><href>https://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png</href></Icon></IconStyle></Style>',
     ]
 
-    lines.append("    <Folder><name>Converted Data</name>")
-
-    # ポイント出力
+    # ポイント出力 (Folderタグを廃止し、Document直下にPlacemarkを配置)
     if "ポイント" in kml_export_type and res_data is not None:
         for _, r in res_data.iterrows():
             safe_name = escape_xml(r["点名"])
             lines += [
-                "      <Placemark>",
-                f"        <name>{safe_name}</name>",
-                "        <styleUrl>#point_style</styleUrl>",
-                "        <Point><coordinates>" + f"{r['経度']},{r['緯度']},{r['楕円体高']}" + "</coordinates></Point>",
-                "      </Placemark>",
+                "    <Placemark>",
+                f"      <name>{safe_name}</name>",
+                "      <styleUrl>#point_style</styleUrl>",
+                f"      <Point><coordinates>{r['経度']},{r['緯度']},{r['楕円体高']}</coordinates></Point>",
+                "    </Placemark>",
             ]
 
-    # 図形出力
+    # 図形出力 (DJI Pilot 2が認識できるようタグ構造と改行フォーマットをGoogle仕様に完全統一)
     if "図形" in kml_export_type and non_point_features:
         poly_count, line_count = 1, 1
         for feat in non_point_features:
@@ -133,28 +131,43 @@ def build_kml(res_data, kml_export_type, non_point_features):
                 ring = list(coords[0])
                 if len(ring) < 3: continue
                 if ring[0] != ring[-1]: ring.append(ring[0])
-                coord_str = " ".join(f"{c[0]},{c[1]},0" for c in ring)
+                
+                # 座標を1点ずつ改行してインデントを揃える
+                coord_lines = "\n".join(f"              {c[0]},{c[1]},0" for c in ring)
                 lines += [
-                    "      <Placemark>",
-                    f"        <name>Polygon_{poly_count}</name>",
-                    "        <styleUrl>#poly_style</styleUrl>",
-                    "        <Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>"+coord_str+"</coordinates></LinearRing></outerBoundaryIs></Polygon>",
-                    "      </Placemark>"
+                    "    <Placemark>",
+                    f"      <name>Polygon_{poly_count}</name>",
+                    "      <styleUrl>#poly_style</styleUrl>",
+                    "      <Polygon>",
+                    "        <outerBoundaryIs>",
+                    "          <LinearRing>",
+                    "            <tessellate>1</tessellate>",
+                    "            <coordinates>",
+                    f"{coord_lines}",
+                    "            </coordinates>",
+                    "          </LinearRing>",
+                    "        </outerBoundaryIs>",
+                    "      </Polygon>",
+                    "    </Placemark>"
                 ]
                 poly_count += 1
             elif g_type == "LineString":
                 if len(coords) < 2: continue
-                coord_str = " ".join(f"{c[0]},{c[1]},0" for c in coords)
+                coord_lines = "\n".join(f"              {c[0]},{c[1]},0" for c in coords)
                 lines += [
-                    "      <Placemark>",
-                    f"        <name>Line_{line_count}</name>",
-                    "        <styleUrl>#line_style</styleUrl>",
-                    "        <LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>"+coord_str+"</coordinates></LineString>",
-                    "      </Placemark>"
+                    "    <Placemark>",
+                    f"      <name>Line_{line_count}</name>",
+                    "      <styleUrl>#line_style</styleUrl>",
+                    "      <LineString>",
+                    "        <tessellate>1</tessellate>",
+                    "        <coordinates>",
+                    f"{coord_lines}",
+                    "        </coordinates>",
+                    "      </LineString>",
+                    "    </Placemark>"
                 ]
                 line_count += 1
 
-    lines.append("    </Folder>")
     lines.append("  </Document>")
     lines.append("</kml>")
     return "\n".join(lines).encode("utf-8")
